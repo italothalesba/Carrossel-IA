@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, Plus, Loader2, Trash2 } from 'lucide-react';
 import { extractStyleFromImages, StyleData } from '../services/gemini';
+import { get, set } from 'idb-keyval';
 
 export default function StyleManagement() {
   const [styles, setStyles] = useState<StyleData[]>([]);
@@ -11,15 +12,27 @@ export default function StyleManagement() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const saved = localStorage.getItem('carousel_styles');
-    if (saved) {
-      setStyles(JSON.parse(saved));
-    }
+    const loadStyles = async () => {
+      try {
+        const saved = await get('carousel_styles');
+        if (saved) {
+          setStyles(saved);
+        }
+      } catch (err) {
+        console.error('Failed to load styles from IndexedDB', err);
+      }
+    };
+    loadStyles();
   }, []);
 
-  const saveStyles = (newStyles: StyleData[]) => {
+  const saveStyles = async (newStyles: StyleData[]) => {
     setStyles(newStyles);
-    localStorage.setItem('carousel_styles', JSON.stringify(newStyles));
+    try {
+      await set('carousel_styles', newStyles);
+    } catch (err) {
+      console.error('Failed to save styles to IndexedDB', err);
+      setError('Erro ao salvar estilos. O armazenamento pode estar cheio.');
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -53,7 +66,7 @@ export default function StyleManagement() {
     setError('');
     try {
       const styleData = await extractStyleFromImages(selectedImages, newStyleName);
-      saveStyles([...styles, styleData]);
+      await saveStyles([...styles, styleData]);
       setIsAdding(false);
       setNewStyleName('');
       setSelectedImages([]);
@@ -64,8 +77,8 @@ export default function StyleManagement() {
     }
   };
 
-  const deleteStyle = (id: string) => {
-    saveStyles(styles.filter(s => s.id !== id));
+  const deleteStyle = async (id: string) => {
+    await saveStyles(styles.filter(s => s.id !== id));
   };
 
   return (

@@ -1,7 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 function getAi() {
-  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  let apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    try {
+      // @ts-ignore
+      apiKey = process.env.API_KEY;
+    } catch (e) {
+      // ignore
+    }
+  }
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set it in the Secrets panel.");
+  }
+  return new GoogleGenAI({ apiKey });
 }
 
 export interface StyleData {
