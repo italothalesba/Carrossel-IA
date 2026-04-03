@@ -50,11 +50,15 @@ export default function CarouselCreation() {
       const generatedSlides = await generateCarouselContent(content, style);
       setSlides(generatedSlides);
 
-      // 2. Generate images for each slide
+      // 2. Generate images for each slide with specific slide type
       const slidesWithImages = await Promise.all(
-        generatedSlides.map(async (slide) => {
+        generatedSlides.map(async (slide, index) => {
           try {
-            const imageUrl = await generateSlideImage(slide.imagePrompt, style);
+            let slideType: 'cover' | 'content' | 'cta' = 'content';
+            if (index === 0) slideType = 'cover';
+            else if (index === generatedSlides.length - 1) slideType = 'cta';
+
+            const imageUrl = await generateSlideImage(slide.imagePrompt, style, slideType);
             return { ...slide, imageUrl };
           } catch (err) {
             console.error("Failed to generate image for slide", slide.title, err);
@@ -72,8 +76,6 @@ export default function CarouselCreation() {
   };
 
   const handleDownload = (slideIndex: number) => {
-    // In a real app, we would draw the text over the image on a canvas and download it.
-    // For this prototype, we'll just download the background image if available.
     const slide = slides[slideIndex];
     if (slide.imageUrl) {
       const a = document.createElement('a');
@@ -87,7 +89,7 @@ export default function CarouselCreation() {
     <div className="p-8 max-w-6xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Criação de Carrossel</h1>
-        <p className="text-gray-500 mt-2">Gere um carrossel de 4 slides a partir do seu conteúdo.</p>
+        <p className="text-gray-500 mt-2">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 1080x1440).</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -162,14 +164,13 @@ export default function CarouselCreation() {
 
         <div className="lg:col-span-2">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 min-h-[600px]">
-            <h2 className="text-xl font-semibold mb-6">Pré-visualização</h2>
+            <h2 className="text-xl font-semibold mb-6">Pré-visualização (3:4)</h2>
             
             {slides.length > 0 ? (
               <div className="grid grid-cols-2 gap-6">
                 {slides.map((slide, idx) => {
-                  const style = styles.find(s => s.id === selectedStyleId);
                   return (
-                    <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-gray-200 group">
+                    <div key={idx} className="relative aspect-[3/4] rounded-xl overflow-hidden border border-gray-200 group shadow-sm">
                       {slide.imageUrl ? (
                         <img src={slide.imageUrl} alt={`Slide ${idx + 1}`} className="absolute inset-0 w-full h-full object-cover" />
                       ) : (
@@ -179,9 +180,9 @@ export default function CarouselCreation() {
                       )}
                       
                       {/* Overlay text */}
-                      <div className="absolute inset-0 bg-black/40 p-6 flex flex-col justify-center text-white">
-                        <h3 className="text-xl font-bold mb-2">{slide.title}</h3>
-                        <p className="text-sm opacity-90">{slide.text}</p>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-6 flex flex-col justify-end text-white">
+                        <h3 className="text-xl font-bold mb-2 drop-shadow-md">{slide.title}</h3>
+                        <p className="text-sm opacity-90 drop-shadow-md">{slide.text}</p>
                       </div>
 
                       <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -194,8 +195,8 @@ export default function CarouselCreation() {
                         </button>
                       </div>
                       
-                      <div className="absolute bottom-4 right-4 bg-black/50 text-white text-xs px-2 py-1 rounded">
-                        {idx + 1} / 4
+                      <div className="absolute top-4 left-4 bg-black/60 backdrop-blur-sm text-white text-xs px-2 py-1 rounded font-medium">
+                        {idx === 0 ? 'Capa' : idx === slides.length - 1 ? 'CTA' : `Meio (${idx + 1})`}
                       </div>
                     </div>
                   );
