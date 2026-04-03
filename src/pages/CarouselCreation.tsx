@@ -180,7 +180,7 @@ export default function CarouselCreation() {
                       
                       {/* Overlay text */}
                       <div className="absolute inset-0 bg-black/40 p-6 flex flex-col justify-center text-white">
-                        <h3 className="text-xl font-bold mb-2" style={{ color: style?.colors.primary || 'white' }}>{slide.title}</h3>
+                        <h3 className="text-xl font-bold mb-2">{slide.title}</h3>
                         <p className="text-sm opacity-90">{slide.text}</p>
                       </div>
 
