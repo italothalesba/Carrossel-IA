@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-do
 import { LayoutDashboard, ImagePlus } from 'lucide-react';
 import StyleManagement from './pages/StyleManagement';
 import CarouselCreation from './pages/CarouselCreation';
+import ApiKeyGate from './components/ApiKeyGate';
 import { cn } from './lib/utils';
 
 function Sidebar() {
@@ -63,9 +64,11 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppLayout />
-    </BrowserRouter>
+    <ApiKeyGate>
+      <BrowserRouter>
+        <AppLayout />
+      </BrowserRouter>
+    </ApiKeyGate>
   );
 }
 

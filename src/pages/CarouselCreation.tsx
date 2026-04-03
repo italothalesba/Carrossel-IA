@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic } from 'lucide-react';
 import { generateCarouselContent, generateSlideImage, StyleData, SlideContent } from '../services/gemini';
 import { cn } from '../lib/utils';
+import { get } from 'idb-keyval';
 
 export default function CarouselCreation() {
   const [styles, setStyles] = useState<StyleData[]>([]);
@@ -13,14 +14,20 @@ export default function CarouselCreation() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const saved = localStorage.getItem('carousel_styles');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setStyles(parsed);
-      if (parsed.length > 0) {
-        setSelectedStyleId(parsed[0].id);
+    const loadStyles = async () => {
+      try {
+        const saved = await get('carousel_styles');
+        if (saved) {
+          setStyles(saved);
+          if (saved.length > 0) {
+            setSelectedStyleId(saved[0].id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load styles from IndexedDB', err);
       }
-    }
+    };
+    loadStyles();
   }, []);
 
   const handleGenerate = async () => {
