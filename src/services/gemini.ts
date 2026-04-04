@@ -64,6 +64,71 @@ async function analyzeCategory(ai: any, images: string[], categoryName: string):
   return { imagesBase64: images, styleDescription: response.text || "" };
 }
 
+export async function embedText(text: string): Promise<number[]> {
+  const ai = getAi();
+  const result = await ai.models.embedContent({
+    model: 'gemini-embedding-2-preview',
+    contents: text,
+  });
+  
+  if (result.embeddings && result.embeddings.length > 0) {
+    return result.embeddings[0].values;
+  }
+  throw new Error("Failed to generate embeddings");
+}
+
+export async function upsertStyleToPinecone(style: StyleData) {
+  const combinedDescription = `
+    Style Name: ${style.name}
+    Cover Style: ${style.cover.styleDescription}
+    Content Style: ${style.content.styleDescription}
+    CTA Style: ${style.cta.styleDescription}
+  `;
+  
+  const embedding = await embedText(combinedDescription);
+  
+  const response = await fetch('/api/pinecone/upsert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: style.id,
+      values: embedding,
+      metadata: {
+        name: style.name,
+        coverDesc: style.cover.styleDescription,
+        contentDesc: style.content.styleDescription,
+        ctaDesc: style.cta.styleDescription
+      }
+    })
+  });
+  
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to upsert to Pinecone");
+  }
+}
+
+export async function queryStyleFromPinecone(content: string): Promise<string | null> {
+  const embedding = await embedText(content);
+  
+  const response = await fetch('/api/pinecone/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vector: embedding })
+  });
+  
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to query Pinecone");
+  }
+  
+  const data = await response.json();
+  if (data.matches && data.matches.length > 0) {
+    return data.matches[0].id;
+  }
+  return null;
+}
+
 export async function extractStyleFromImages(categorized: CategorizedImages, name: string): Promise<StyleData> {
   const ai = getAi();
   

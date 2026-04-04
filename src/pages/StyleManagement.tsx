@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, Plus, Loader2, Trash2, GripVertical } from 'lucide-react';
-import { extractStyleFromImages, StyleData, CategorizedImages } from '../services/gemini';
+import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPinecone } from '../services/gemini';
 import { get, set } from 'idb-keyval';
 
 interface UploadedImage {
@@ -107,6 +107,14 @@ export default function StyleManagement() {
 
       const styleData = await extractStyleFromImages(categorized, newStyleName);
       await saveStyles([...styles, styleData]);
+      
+      try {
+        await upsertStyleToPinecone(styleData);
+      } catch (pineconeErr) {
+        console.error("Failed to sync to Pinecone:", pineconeErr);
+        // We don't block the UI if Pinecone fails, but we log it
+      }
+
       setIsAdding(false);
       setNewStyleName('');
       setUploadedImages([]);

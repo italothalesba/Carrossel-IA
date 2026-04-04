@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic } from 'lucide-react';
-import { generateCarouselContent, generateSlideImage, StyleData, SlideContent } from '../services/gemini';
+import { generateCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone } from '../services/gemini';
 import { cn } from '../lib/utils';
 import { get } from 'idb-keyval';
 
@@ -30,6 +30,36 @@ export default function CarouselCreation() {
     loadStyles();
   }, []);
 
+  const handleAutoSelectStyle = async () => {
+    if (!content.trim()) {
+      setError('Por favor, insira o conteúdo primeiro para a IA encontrar o melhor estilo.');
+      return;
+    }
+    
+    setIsGenerating(true);
+    setError('');
+    try {
+      const bestStyleId = await queryStyleFromPinecone(content);
+      if (bestStyleId) {
+        const styleExists = styles.find(s => s.id === bestStyleId);
+        if (styleExists) {
+          setSelectedStyleId(bestStyleId);
+          // Auto-generate after selecting
+          await generateWithStyle(styleExists);
+        } else {
+          setError('Estilo encontrado no Pinecone, mas não está disponível localmente.');
+          setIsGenerating(false);
+        }
+      } else {
+        setError('Nenhum estilo compatível encontrado no Pinecone.');
+        setIsGenerating(false);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Erro ao consultar Pinecone.');
+      setIsGenerating(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!content.trim()) {
       setError('Por favor, insira o conteúdo.');
@@ -43,6 +73,10 @@ export default function CarouselCreation() {
 
     setIsGenerating(true);
     setError('');
+    await generateWithStyle(style);
+  };
+
+  const generateWithStyle = async (style: StyleData) => {
     setSlides([]);
 
     try {
@@ -145,20 +179,30 @@ export default function CarouselCreation() {
 
             {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
 
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || !content || !selectedStyleId}
-              className="w-full mt-4 flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 size={20} className="animate-spin" />
-                  <span>Gerando Carrossel...</span>
-                </>
-              ) : (
-                <span>GERAR CARROSSEL</span>
-              )}
-            </button>
+            <div className="flex flex-col space-y-3 mt-4">
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating || !content || !selectedStyleId}
+                className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 size={20} className="animate-spin" />
+                    <span>Gerando Carrossel...</span>
+                  </>
+                ) : (
+                  <span>GERAR CARROSSEL</span>
+                )}
+              </button>
+              
+              <button
+                onClick={handleAutoSelectStyle}
+                disabled={isGenerating || !content}
+                className="w-full flex items-center justify-center space-x-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium border border-indigo-200"
+              >
+                <span>✨ Auto-Selecionar Estilo via Pinecone</span>
+              </button>
+            </div>
           </div>
         </div>
 
