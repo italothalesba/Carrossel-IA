@@ -238,7 +238,12 @@ export default function CarouselCreation() {
       setSuccessMessage('Estilo atualizado com sucesso! O aprendizado foi concluído.');
       setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err: any) {
-      setError(err.message || "Erro ao processar feedback");
+      const errorMessage = err.message || "";
+      if (errorMessage.toLowerCase().includes("quota") || errorMessage.includes("429")) {
+        setError("Limite de uso da API atingido (Muitas requisições). Por favor, aguarde cerca de 1 minuto e tente novamente.");
+      } else {
+        setError(errorMessage || "Erro ao processar feedback");
+      }
     } finally {
       setIsLearning(false);
     }
