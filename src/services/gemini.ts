@@ -61,6 +61,10 @@ export interface StyleData {
   content: SlideStyleDetail;
   cta: SlideStyleDetail;
   metadata?: StyleMetadata;
+  assets?: {
+    logo?: string;
+    background?: string;
+  };
 }
 
 export interface SlideContent {
@@ -302,9 +306,29 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
     }
   }));
 
+  let assetInstructions = "";
+  if (style.assets?.logo) {
+    imageParts.push({
+      inlineData: {
+        data: style.assets.logo.split(',')[1],
+        mimeType: style.assets.logo.split(',')[0].split(':')[1].split(';')[0],
+      }
+    });
+    assetInstructions += "\n- A LOGO image is provided in the reference images. You MUST include this logo appropriately in the slide.";
+  }
+  if (style.assets?.background) {
+    imageParts.push({
+      inlineData: {
+        data: style.assets.background.split(',')[1],
+        mimeType: style.assets.background.split(',')[0].split(':')[1].split(';')[0],
+      }
+    });
+    assetInstructions += "\n- A BACKGROUND image is provided in the reference images. You MUST use this as the background for the slide.";
+  }
+
   const styleInstruction = activeStyle.styleDescription 
-    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}\n\n${imageParts.length > 0 ? 'Use the provided reference images as a visual guide for the exact aesthetic, colors, and layout.' : 'Follow the style description strictly to maintain visual consistency.'}`
-    : `\n\nstrictly following the visual style, colors, and layout. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}.`;
+    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}${assetInstructions}\n\n${imageParts.length > 0 ? 'Use the provided reference images and assets as a visual guide for the exact aesthetic, colors, and layout.' : 'Follow the style description strictly to maintain visual consistency.'}`
+    : `\n\nstrictly following the visual style, colors, and layout. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}${assetInstructions}.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',

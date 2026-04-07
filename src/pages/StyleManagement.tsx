@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Plus, Loader2, Trash2, GripVertical } from 'lucide-react';
+import { Upload, Plus, Loader2, Trash2, GripVertical, Pencil } from 'lucide-react';
 import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPinecone } from '../services/gemini';
 import { set } from 'idb-keyval';
 import { db, collection, query, onSnapshot, doc, setDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
@@ -24,6 +24,10 @@ export default function StyleManagement() {
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState('');
+  const [editingStyleId, setEditingStyleId] = useState<string | null>(null);
+  const [logoImage, setLogoImage] = useState<string | null>(null);
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
+  const [imagesChanged, setImagesChanged] = useState(false);
 
   useEffect(() => {
     // Listen to Firestore for styles
@@ -71,10 +75,24 @@ export default function StyleManagement() {
     }));
 
     setUploadedImages(prev => [...prev, ...newImages]);
+    setImagesChanged(true);
+  };
+
+  const handleAssetUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'logo' | 'background') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const base64 = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+    if (type === 'logo') setLogoImage(base64);
+    if (type === 'background') setBackgroundImage(base64);
   };
 
   const updateImageCategory = (id: string, category: 'cover' | 'content' | 'cta') => {
     setUploadedImages(prev => prev.map(img => img.id === id ? { ...img, category } : img));
+    setImagesChanged(true);
   };
 
   const updateImageProject = (id: string, project: string) => {
@@ -83,6 +101,7 @@ export default function StyleManagement() {
 
   const removeImage = (id: string) => {
     setUploadedImages(prev => prev.filter(img => img.id !== id));
+    setImagesChanged(true);
   };
 
   const handleAnalyze = async () => {
@@ -90,7 +109,7 @@ export default function StyleManagement() {
       setError('Por favor, insira um nome para o estilo.');
       return;
     }
-    if (uploadedImages.length === 0) {
+    if (!editingStyleId && uploadedImages.length === 0) {
       setError('Por favor, selecione pelo menos uma imagem.');
       return;
     }
@@ -98,26 +117,51 @@ export default function StyleManagement() {
     setIsAnalyzing(true);
     setError('');
     try {
-      const categorized: CategorizedImages = {
-        cover: uploadedImages.filter(i => i.category === 'cover').map(i => i.base64),
-        content: uploadedImages.filter(i => i.category === 'content').map(i => i.base64),
-        cta: uploadedImages.filter(i => i.category === 'cta').map(i => i.base64),
+      let existingStyle = editingStyleId ? styles.find(s => s.id === editingStyleId) : null;
+      let styleData: StyleData;
+
+      if (!existingStyle || imagesChanged) {
+        const categorized: CategorizedImages = {
+          cover: uploadedImages.filter(i => i.category === 'cover').map(i => i.base64),
+          content: uploadedImages.filter(i => i.category === 'content').map(i => i.base64),
+          cta: uploadedImages.filter(i => i.category === 'cta').map(i => i.base64),
+        };
+
+        const metadata = {
+          audience: audience.trim(),
+          tone: tone.trim(),
+          colors: colors.trim(),
+          extraInstructions: extraInstructions.trim(),
+        };
+
+        styleData = await extractStyleFromImages(categorized, newStyleName, metadata);
+        if (existingStyle) {
+          styleData.id = existingStyle.id;
+        }
+      } else {
+        styleData = {
+          ...existingStyle,
+          name: newStyleName,
+          metadata: {
+            audience: audience.trim(),
+            tone: tone.trim(),
+            colors: colors.trim(),
+            extraInstructions: extraInstructions.trim(),
+          }
+        };
+      }
+
+      styleData.assets = {
+        logo: logoImage || undefined,
+        background: backgroundImage || undefined,
       };
 
-      const metadata = {
-        audience: audience.trim(),
-        tone: tone.trim(),
-        colors: colors.trim(),
-        extraInstructions: extraInstructions.trim(),
-      };
-
-      const styleData = await extractStyleFromImages(categorized, newStyleName, metadata);
-      
       // Save to Firestore
       const styleDoc = {
         ...styleData,
-        createdBy: 'anonymous',
-        createdAt: serverTimestamp()
+        createdBy: existingStyle?.createdBy || 'anonymous',
+        createdAt: existingStyle?.createdAt || serverTimestamp(),
+        updatedAt: serverTimestamp()
       };
 
       try {
@@ -132,18 +176,61 @@ export default function StyleManagement() {
         console.error("Failed to sync to Pinecone:", pineconeErr);
       }
 
-      setIsAdding(false);
-      setNewStyleName('');
-      setAudience('');
-      setTone('');
-      setColors('');
-      setExtraInstructions('');
-      setUploadedImages([]);
+      resetForm();
     } catch (err: any) {
       setError(err.message || 'Erro ao analisar imagens.');
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const resetForm = () => {
+    setIsAdding(false);
+    setEditingStyleId(null);
+    setNewStyleName('');
+    setAudience('');
+    setTone('');
+    setColors('');
+    setExtraInstructions('');
+    setLogoImage(null);
+    setBackgroundImage(null);
+    setUploadedImages([]);
+    setImagesChanged(false);
+    setError('');
+  };
+
+  const handleEditStyle = (style: StyleData) => {
+    setEditingStyleId(style.id);
+    setNewStyleName(style.name);
+    setAudience(style.metadata?.audience || '');
+    setTone(style.metadata?.tone || '');
+    setColors(style.metadata?.colors || '');
+    setExtraInstructions(style.metadata?.extraInstructions || '');
+    setLogoImage(style.assets?.logo || null);
+    setBackgroundImage(style.assets?.background || null);
+    
+    const existingImages: UploadedImage[] = [];
+    const addImagesFromCategory = (base64Array: string[] | undefined, category: 'cover' | 'content' | 'cta') => {
+      if (!base64Array) return;
+      base64Array.forEach((base64, index) => {
+        existingImages.push({
+          id: `existing-${category}-${index}-${Math.random().toString(36).substring(7)}`,
+          base64,
+          name: `Imagem de ${category === 'cover' ? 'Capa' : category === 'content' ? 'Meio' : 'CTA'} ${index + 1}`,
+          project: 'Imagens Atuais',
+          category
+        });
+      });
+    };
+
+    addImagesFromCategory(style.cover?.imagesBase64, 'cover');
+    addImagesFromCategory(style.content?.imagesBase64, 'content');
+    addImagesFromCategory(style.cta?.imagesBase64, 'cta');
+
+    setUploadedImages(existingImages);
+    setImagesChanged(false);
+    setIsAdding(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const deleteStyle = async (id: string) => {
@@ -165,7 +252,7 @@ export default function StyleManagement() {
         </div>
         {!isAdding && (
           <button
-            onClick={() => setIsAdding(true)}
+            onClick={() => { resetForm(); setIsAdding(true); }}
             className="flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors shadow-sm w-full md:w-auto"
           >
             <Plus size={20} />
@@ -176,7 +263,7 @@ export default function StyleManagement() {
 
       {isAdding && (
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Novo Estilo Avançado</h2>
+          <h2 className="text-xl font-semibold mb-4">{editingStyleId ? "Editar Estilo / Adicionar Aprendizados" : "Novo Estilo Avançado"}</h2>
           
           <div className="space-y-6">
             <div>
@@ -232,6 +319,28 @@ export default function StyleManagement() {
                     placeholder="Ex: Sempre usar fontes em negrito"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
                   />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Ativos Padrão (Opcional)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Logo da Marca</label>
+                  <div className="flex items-center space-x-3">
+                    {logoImage && <img src={logoImage} alt="Logo" className="w-10 h-10 object-contain bg-white border rounded" />}
+                    <input type="file" accept="image/*" onChange={(e) => handleAssetUpload(e, 'logo')} className="text-xs" />
+                    {logoImage && <button onClick={() => setLogoImage(null)} className="text-red-500"><Trash2 size={14}/></button>}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Background Padrão</label>
+                  <div className="flex items-center space-x-3">
+                    {backgroundImage && <img src={backgroundImage} alt="Background" className="w-10 h-10 object-cover border rounded" />}
+                    <input type="file" accept="image/*" onChange={(e) => handleAssetUpload(e, 'background')} className="text-xs" />
+                    {backgroundImage && <button onClick={() => setBackgroundImage(null)} className="text-red-500"><Trash2 size={14}/></button>}
+                  </div>
                 </div>
               </div>
             </div>
@@ -303,16 +412,7 @@ export default function StyleManagement() {
 
             <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t">
               <button
-                onClick={() => {
-                  setIsAdding(false);
-                  setUploadedImages([]);
-                  setNewStyleName('');
-                  setAudience('');
-                  setTone('');
-                  setColors('');
-                  setExtraInstructions('');
-                  setError('');
-                }}
+                onClick={resetForm}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors order-2 sm:order-1"
                 disabled={isAnalyzing}
               >
@@ -320,16 +420,16 @@ export default function StyleManagement() {
               </button>
               <button
                 onClick={handleAnalyze}
-                disabled={isAnalyzing || uploadedImages.length === 0 || !newStyleName}
+                disabled={isAnalyzing || (!editingStyleId && uploadedImages.length === 0) || !newStyleName}
                 className="flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-2 rounded-lg transition-colors order-1 sm:order-2"
               >
                 {isAnalyzing ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
-                    <span className="text-sm">Analisando...</span>
+                    <span className="text-sm">Salvando...</span>
                   </>
                 ) : (
-                  <span>Iniciar Aprendizado</span>
+                  <span>{editingStyleId ? "Salvar Alterações" : "Iniciar Aprendizado"}</span>
                 )}
               </button>
             </div>
@@ -342,9 +442,14 @@ export default function StyleManagement() {
           <div key={style.id} className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col">
             <div className="flex justify-between items-start mb-4">
               <h3 className="text-lg font-semibold text-gray-900 truncate pr-2">{style.name}</h3>
-              <button onClick={() => deleteStyle(style.id)} className="text-gray-400 hover:text-red-500 transition-colors flex-shrink-0">
-                <Trash2 size={18} />
-              </button>
+              <div className="flex space-x-1">
+                <button onClick={() => handleEditStyle(style)} className="text-gray-400 hover:text-purple-500 transition-colors flex-shrink-0 p-1" title="Editar / Adicionar Aprendizados">
+                  <Pencil size={18} />
+                </button>
+                <button onClick={() => deleteStyle(style.id)} className="text-gray-400 hover:text-red-500 transition-colors flex-shrink-0 p-1">
+                  <Trash2 size={18} />
+                </button>
+              </div>
             </div>
             
             <div className="space-y-4 flex-1">
