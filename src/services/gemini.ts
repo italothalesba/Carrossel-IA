@@ -143,7 +143,7 @@ Return a JSON object with the updated fields:
     }
   });
 
-  const text = response.text();
+  const text = response.text;
   if (!text) throw new Error("Failed to generate feedback response");
   
   const result = JSON.parse(text);

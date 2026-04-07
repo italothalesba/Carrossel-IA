@@ -4,11 +4,12 @@
  */
 
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ImagePlus } from 'lucide-react';
+import { LayoutDashboard, ImagePlus, FileDown } from 'lucide-react';
 import StyleManagement from './pages/StyleManagement';
 import CarouselCreation from './pages/CarouselCreation';
 import ApiKeyGate from './components/ApiKeyGate';
 import { cn } from './lib/utils';
+import { generateMasterPromptPDF } from './lib/pdfGenerator';
 
 function Sidebar() {
   const location = useLocation();
@@ -44,6 +45,15 @@ function Sidebar() {
           );
         })}
       </nav>
+      <div className="p-4 border-t border-gray-800">
+        <button
+          onClick={generateMasterPromptPDF}
+          className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-400 hover:bg-gray-800 hover:text-white"
+        >
+          <FileDown size={20} />
+          <span className="font-medium">Exportar Prompt</span>
+        </button>
+      </div>
     </div>
   );
 }

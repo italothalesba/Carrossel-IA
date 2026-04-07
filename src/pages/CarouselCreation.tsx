@@ -34,6 +34,7 @@ export default function CarouselCreation() {
     comment: string;
   } | null>(null);
   const [isLearning, setIsLearning] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     const loadData = async () => {
@@ -234,6 +235,8 @@ export default function CarouselCreation() {
       }
 
       setFeedbackState(null);
+      setSuccessMessage('Estilo atualizado com sucesso! O aprendizado foi concluído.');
+      setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err: any) {
       setError(err.message || "Erro ao processar feedback");
     } finally {
@@ -259,7 +262,14 @@ export default function CarouselCreation() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-8 max-w-6xl mx-auto relative">
+      {successMessage && (
+        <div className="fixed top-6 right-6 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top-4">
+          <ThumbsUp size={20} />
+          <span className="font-medium">{successMessage}</span>
+        </div>
+      )}
+
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Criação de Carrossel</h1>
         <p className="text-gray-500 mt-2">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 1080x1440).</p>
