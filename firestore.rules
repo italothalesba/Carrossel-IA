@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: styles
+    // Document ID: styleId
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required, 1-100 chars)
+    //   - cover: map (required)
+    //     - imagesBase64: list of strings (max 10 items, each max 1MB)
+    //     - styleDescription: string (max 5000 chars)
+    //   - content: map (required)
+    //     - imagesBase64: list of strings
+    //     - styleDescription: string
+    //   - cta: map (required)
+    //     - imagesBase64: list of strings
+    //     - styleDescription: string
+    //   - metadata: map (optional)
+    //     - audience: string
+    //     - tone: string
+    //     - colors: string
+    //     - extraInstructions: string
+    //   - createdBy: string (required, immutable)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "italothalesba@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    function isValidList(val, max) {
+      return val is list && val.size() <= max;
+    }
+
+    function isValidStyle(data) {
+      return hasRequiredFields(['id', 'name', 'cover', 'content', 'cta', 'createdBy', 'createdAt']) &&
+             isValidString(data.id, 1, 100) &&
+             isValidString(data.name, 1, 100) &&
+             data.cover is map &&
+             data.content is map &&
+             data.cta is map &&
+             data.createdBy is string &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /styles/{styleId} {
+      // Prototype: Allow public read/write
+      allow read: if true;
+      allow create: if isValidStyle(request.resource.data) &&
+                      request.resource.data.createdAt == request.time;
+      allow update: if isValidStyle(request.resource.data) &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if true;
+    }
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

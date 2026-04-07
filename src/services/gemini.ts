@@ -295,7 +295,7 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
     activeStyle = style.cta;
   }
 
-  const imageParts = activeStyle.imagesBase64.map((base64: string) => ({
+  const imageParts = (activeStyle.imagesBase64 || []).map((base64: string) => ({
     inlineData: {
       data: base64.split(',')[1],
       mimeType: base64.split(',')[0].split(':')[1].split(';')[0],
@@ -303,8 +303,8 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
   }));
 
   const styleInstruction = activeStyle.styleDescription 
-    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}\n\nUse the provided reference images as a visual guide for the exact aesthetic, colors, and layout.`
-    : `\n\nstrictly following the visual style, colors, and layout of the provided reference images. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}.`;
+    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}\n\n${imageParts.length > 0 ? 'Use the provided reference images as a visual guide for the exact aesthetic, colors, and layout.' : 'Follow the style description strictly to maintain visual consistency.'}`
+    : `\n\nstrictly following the visual style, colors, and layout. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',

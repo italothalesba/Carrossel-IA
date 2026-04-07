@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown, ImagePlus } from 'lucide-react';
 import { generateCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone } from '../services/gemini';
 import { cn } from '../lib/utils';
 import { get, set } from 'idb-keyval';
+import { db, collection, query, onSnapshot, doc, updateDoc, OperationType, handleFirestoreError } from '../firebase';
 
 interface SlideFeedback {
   status: 'approved' | 'rejected';
@@ -37,25 +38,32 @@ export default function CarouselCreation() {
   const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
-    const loadData = async () => {
+    // Listen to Firestore for styles
+    const q = query(collection(db, 'styles'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const stylesList: StyleData[] = [];
+      snapshot.forEach((doc) => {
+        stylesList.push(doc.data() as StyleData);
+      });
+      setStyles(stylesList);
+      if (stylesList.length > 0 && !selectedStyleId) {
+        setSelectedStyleId(stylesList[0].id);
+      }
+    });
+
+    const loadHistory = async () => {
       try {
-        const savedStyles = await get('carousel_styles');
-        if (savedStyles) {
-          setStyles(savedStyles);
-          if (savedStyles.length > 0) {
-            setSelectedStyleId(savedStyles[0].id);
-          }
-        }
-        
         const savedHistory = await get('carousel_history');
         if (savedHistory) {
           setHistory(savedHistory);
         }
       } catch (err) {
-        console.error('Failed to load data from IndexedDB', err);
+        console.error('Failed to load history from IndexedDB', err);
       }
     };
-    loadData();
+    loadHistory();
+
+    return () => unsubscribe();
   }, []);
 
   const handleAutoSelectStyle = async () => {
@@ -211,9 +219,15 @@ export default function CarouselCreation() {
 
       const updatedStyle = await learnFromFeedback(style, slideType, feedbackState.status, feedbackState.comment);
       
-      const newStyles = styles.map(s => s.id === style.id ? updatedStyle : s);
-      setStyles(newStyles);
-      await set('carousel_styles', newStyles);
+      // Update Firestore
+      try {
+        await updateDoc(doc(db, 'styles', style.id), {
+          [slideType]: updatedStyle[slideType],
+          metadata: updatedStyle.metadata
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `styles/${style.id}`);
+      }
       
       try {
         await upsertStyleToPinecone(updatedStyle);
@@ -267,7 +281,7 @@ export default function CarouselCreation() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto relative">
+    <div className="p-4 md:p-8 max-w-6xl mx-auto relative">
       {successMessage && (
         <div className="fixed top-6 right-6 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top-4">
           <ThumbsUp size={20} />
@@ -276,18 +290,18 @@ export default function CarouselCreation() {
       )}
 
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Criação de Carrossel</h1>
-        <p className="text-gray-500 mt-2">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 1080x1440).</p>
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Criação de Carrossel</h1>
+        <p className="text-gray-500 mt-2 text-sm md:text-base">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 1080x1440).</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
             <label className="block text-sm font-medium text-gray-700 mb-2">Estilo Visual</label>
             <select
               value={selectedStyleId}
               onChange={(e) => setSelectedStyleId(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
             >
               {styles.length === 0 && <option value="">Nenhum estilo disponível</option>}
               {styles.map(s => (
@@ -296,7 +310,7 @@ export default function CarouselCreation() {
             </select>
           </div>
 
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
             <div className="flex space-x-2 mb-4 border-b border-gray-200 pb-2">
               <button
                 onClick={() => setActiveTab('text')}
@@ -319,7 +333,7 @@ export default function CarouselCreation() {
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder="Cole seu texto aqui..."
-                className="w-full h-48 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none"
+                className="w-full h-48 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
               />
             ) : (
               <input
@@ -327,22 +341,22 @@ export default function CarouselCreation() {
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder="https://exemplo.com/artigo"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
               />
             )}
 
-            {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
+            {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
 
             <div className="flex flex-col space-y-3 mt-4">
               <button
                 onClick={handleGenerate}
                 disabled={isGenerating || !content || !selectedStyleId}
-                className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium"
+                className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium text-sm"
               >
                 {isGenerating ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
-                    <span>Gerando Carrossel...</span>
+                    <span>Gerando...</span>
                   </>
                 ) : (
                   <span>GERAR CARROSSEL</span>
@@ -352,20 +366,20 @@ export default function CarouselCreation() {
               <button
                 onClick={handleAutoSelectStyle}
                 disabled={isGenerating || !content}
-                className="w-full flex items-center justify-center space-x-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium border border-indigo-200"
+                className="w-full flex items-center justify-center space-x-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium border border-indigo-200 text-xs"
               >
-                <span>✨ Auto-Selecionar Estilo via Pinecone</span>
+                <span>✨ Auto-Selecionar Estilo</span>
               </button>
             </div>
           </div>
         </div>
 
         <div className="lg:col-span-2">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 min-h-[600px]">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200 min-h-[400px]">
             <h2 className="text-xl font-semibold mb-6">Pré-visualização (3:4)</h2>
             
             {slides.length > 0 ? (
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                 {slides.map((slide, idx) => {
                   return (
                     <div key={idx} className="flex flex-col gap-3">

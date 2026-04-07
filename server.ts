@@ -52,6 +52,33 @@ async function startServer() {
 
   await initPinecone();
 
+  app.get('/api/pinecone/health', async (req, res) => {
+    if (!pc) return res.status(500).json({ status: "error", message: "Pinecone not configured" });
+    try {
+      await pc.listIndexes();
+      res.json({ status: "ok" });
+    } catch (error: any) {
+      res.status(500).json({ status: "error", message: error.message });
+    }
+  });
+
+  app.get('/api/pinecone/styles', async (req, res) => {
+    if (!pc) return res.status(500).json({ error: "Pinecone not configured" });
+    try {
+      const index = pc.index(INDEX_NAME);
+      // Query with a zero vector to get all records (up to 100)
+      const queryResponse = await index.query({
+        vector: Array(768).fill(0),
+        topK: 100,
+        includeMetadata: true
+      });
+      res.json({ styles: queryResponse.matches });
+    } catch (error: any) {
+      console.error("Pinecone list error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post('/api/pinecone/upsert', async (req, res) => {
     if (!pc) return res.status(500).json({ error: "Pinecone not configured" });
     try {

@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "Style": {
+      "title": "Visual Style",
+      "description": "Defines a visual style for carousel generation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the style." },
+        "name": { "type": "string", "description": "Name of the style." },
+        "cover": {
+          "type": "object",
+          "properties": {
+            "imagesBase64": { "type": "array", "items": { "type": "string" }, "description": "Base64 encoded reference images for the cover slide." },
+            "styleDescription": { "type": "string", "description": "Detailed visual style description for the cover slide." }
+          }
+        },
+        "content": {
+          "type": "object",
+          "properties": {
+            "imagesBase64": { "type": "array", "items": { "type": "string" }, "description": "Base64 encoded reference images for the content slides." },
+            "styleDescription": { "type": "string", "description": "Detailed visual style description for the content slides." }
+          }
+        },
+        "cta": {
+          "type": "object",
+          "properties": {
+            "imagesBase64": { "type": "array", "items": { "type": "string" }, "description": "Base64 encoded reference images for the CTA slide." },
+            "styleDescription": { "type": "string", "description": "Detailed visual style description for the CTA slide." }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "audience": { "type": "string" },
+            "tone": { "type": "string" },
+            "colors": { "type": "string" },
+            "extraInstructions": { "type": "string" }
+          }
+        },
+        "createdBy": { "type": "string", "description": "User ID of the creator." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "cover", "content", "cta"]
+    }
+  },
+  "firestore": {
+    "/styles/{styleId}": {
+      "schema": "Style",
+      "description": "Collection of visual styles shared across users."
+    }
+  }
+}
