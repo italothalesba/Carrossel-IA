@@ -64,11 +64,9 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <ApiKeyGate>
-      <BrowserRouter>
-        <AppLayout />
-      </BrowserRouter>
-    </ApiKeyGate>
+    <BrowserRouter>
+      <AppLayout />
+    </BrowserRouter>
   );
 }
 

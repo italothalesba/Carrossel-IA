@@ -1,18 +1,38 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-function getAi() {
-  let apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+function getAi(needsPaidKey: boolean = false) {
+  let apiKey;
+  
+  if (needsPaidKey) {
     try {
       // @ts-ignore
       apiKey = process.env.API_KEY;
     } catch (e) {
       // ignore
     }
+    if (!apiKey) {
+      throw new Error("Paid API Key is missing. Please select it in the UI.");
+    }
+  } else {
+    try {
+      // @ts-ignore
+      apiKey = process.env.GEMINI_API_KEY;
+    } catch (e) {
+      // ignore
+    }
+    if (!apiKey) {
+      try {
+        // @ts-ignore
+        apiKey = process.env.API_KEY;
+      } catch (e) {
+        // ignore
+      }
+    }
+    if (!apiKey) {
+      throw new Error("API Key is missing.");
+    }
   }
-  if (!apiKey) {
-    throw new Error("API Key is missing. Please set it in the Secrets panel.");
-  }
+  
   return new GoogleGenAI({ apiKey });
 }
 
@@ -27,12 +47,20 @@ export interface SlideStyleDetail {
   styleDescription: string;
 }
 
+export interface StyleMetadata {
+  audience?: string;
+  tone?: string;
+  colors?: string;
+  extraInstructions?: string;
+}
+
 export interface StyleData {
   id: string;
   name: string;
   cover: SlideStyleDetail;
   content: SlideStyleDetail;
   cta: SlideStyleDetail;
+  metadata?: StyleMetadata;
 }
 
 export interface SlideContent {
@@ -77,9 +105,70 @@ export async function embedText(text: string): Promise<number[]> {
   throw new Error("Failed to generate embeddings");
 }
 
+export async function learnFromFeedback(
+  style: StyleData,
+  slideType: 'cover' | 'content' | 'cta',
+  status: 'approved' | 'rejected',
+  comment: string
+): Promise<StyleData> {
+  const ai = getAi();
+  const prompt = `
+You are an expert AI design assistant.
+We are refining a visual style named "${style.name}".
+
+Current ${slideType} style description:
+${style[slideType].styleDescription}
+
+Current brand extra instructions:
+${style.metadata?.extraInstructions || 'None'}
+
+The user generated a ${slideType} slide and gave this feedback:
+Status: ${status.toUpperCase()}
+User Comment: "${comment}"
+
+Analyze the feedback. If REJECTED, add strict negative constraints or correct the style description to prevent this issue. If APPROVED, reinforce the positive aspects mentioned.
+
+Return a JSON object with the updated fields:
+{
+  "updatedStyleDescription": "The new, refined style description for this slide type.",
+  "updatedExtraInstructions": "The new, refined extra instructions for the brand (keep existing ones and add new ones if needed)."
+}
+  `;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.1-pro-preview',
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+    }
+  });
+
+  const text = response.text();
+  if (!text) throw new Error("Failed to generate feedback response");
+  
+  const result = JSON.parse(text);
+  
+  const updatedStyle = { ...style };
+  updatedStyle[slideType] = {
+    ...updatedStyle[slideType],
+    styleDescription: result.updatedStyleDescription
+  };
+  
+  updatedStyle.metadata = {
+    ...updatedStyle.metadata,
+    extraInstructions: result.updatedExtraInstructions
+  };
+  
+  return updatedStyle;
+}
+
 export async function upsertStyleToPinecone(style: StyleData) {
   const combinedDescription = `
     Style Name: ${style.name}
+    Audience: ${style.metadata?.audience || 'General'}
+    Tone: ${style.metadata?.tone || 'Neutral'}
+    Brand Colors: ${style.metadata?.colors || 'Not specified'}
+    Extra Instructions: ${style.metadata?.extraInstructions || 'None'}
     Cover Style: ${style.cover.styleDescription}
     Content Style: ${style.content.styleDescription}
     CTA Style: ${style.cta.styleDescription}
@@ -95,6 +184,10 @@ export async function upsertStyleToPinecone(style: StyleData) {
       values: embedding,
       metadata: {
         name: style.name,
+        audience: style.metadata?.audience || '',
+        tone: style.metadata?.tone || '',
+        colors: style.metadata?.colors || '',
+        extraInstructions: style.metadata?.extraInstructions || '',
         coverDesc: style.cover.styleDescription,
         contentDesc: style.content.styleDescription,
         ctaDesc: style.cta.styleDescription
@@ -129,7 +222,7 @@ export async function queryStyleFromPinecone(content: string): Promise<string | 
   return null;
 }
 
-export async function extractStyleFromImages(categorized: CategorizedImages, name: string): Promise<StyleData> {
+export async function extractStyleFromImages(categorized: CategorizedImages, name: string, metadata?: StyleMetadata): Promise<StyleData> {
   const ai = getAi();
   
   const [cover, content, cta] = await Promise.all([
@@ -143,7 +236,8 @@ export async function extractStyleFromImages(categorized: CategorizedImages, nam
     name,
     cover,
     content,
-    cta
+    cta,
+    metadata
   };
 }
 
@@ -151,6 +245,10 @@ export async function generateCarouselContent(content: string, style: StyleData)
   const ai = getAi();
   
   const styleContext = `
+  Audience: ${style.metadata?.audience || 'General'}
+  Tone: ${style.metadata?.tone || 'Neutral'}
+  Brand Colors: ${style.metadata?.colors || 'Not specified'}
+  Extra Instructions: ${style.metadata?.extraInstructions || 'None'}
   Cover Style: ${style.cover.styleDescription}
   Content Style: ${style.content.styleDescription}
   CTA Style: ${style.cta.styleDescription}
@@ -205,11 +303,11 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
   }));
 
   const styleInstruction = activeStyle.styleDescription 
-    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nUse the provided reference images as a visual guide for the exact aesthetic, colors, and layout.`
-    : `\n\nstrictly following the visual style, colors, and layout of the provided reference images.`;
+    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}\n\nUse the provided reference images as a visual guide for the exact aesthetic, colors, and layout.`
+    : `\n\nstrictly following the visual style, colors, and layout of the provided reference images. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}.`;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
+    model: 'gemini-2.5-flash-image',
     contents: {
       parts: [
         ...imageParts,
@@ -218,8 +316,7 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
     },
     config: {
       imageConfig: {
-        aspectRatio: "3:4",
-        imageSize: "1K"
+        aspectRatio: "3:4"
       }
     },
   });

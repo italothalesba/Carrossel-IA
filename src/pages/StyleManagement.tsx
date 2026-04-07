@@ -15,6 +15,10 @@ export default function StyleManagement() {
   const [styles, setStyles] = useState<StyleData[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [newStyleName, setNewStyleName] = useState('');
+  const [audience, setAudience] = useState('');
+  const [tone, setTone] = useState('');
+  const [colors, setColors] = useState('');
+  const [extraInstructions, setExtraInstructions] = useState('');
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState('');
@@ -105,7 +109,14 @@ export default function StyleManagement() {
         cta: uploadedImages.filter(i => i.category === 'cta').map(i => i.base64),
       };
 
-      const styleData = await extractStyleFromImages(categorized, newStyleName);
+      const metadata = {
+        audience: audience.trim(),
+        tone: tone.trim(),
+        colors: colors.trim(),
+        extraInstructions: extraInstructions.trim(),
+      };
+
+      const styleData = await extractStyleFromImages(categorized, newStyleName, metadata);
       await saveStyles([...styles, styleData]);
       
       try {
@@ -117,6 +128,10 @@ export default function StyleManagement() {
 
       setIsAdding(false);
       setNewStyleName('');
+      setAudience('');
+      setTone('');
+      setColors('');
+      setExtraInstructions('');
       setUploadedImages([]);
     } catch (err: any) {
       setError(err.message || 'Erro ao analisar imagens.');
@@ -163,6 +178,52 @@ export default function StyleManagement() {
                 placeholder="Ex: Estilo Alfa Contabilidade"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
               />
+            </div>
+
+            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Informações da Marca (Opcional)</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Público-alvo</label>
+                  <input
+                    type="text"
+                    value={audience}
+                    onChange={(e) => setAudience(e.target.value)}
+                    placeholder="Ex: Jovens empreendedores"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Tom de Voz</label>
+                  <input
+                    type="text"
+                    value={tone}
+                    onChange={(e) => setTone(e.target.value)}
+                    placeholder="Ex: Descontraído e direto"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Cores da Marca</label>
+                  <input
+                    type="text"
+                    value={colors}
+                    onChange={(e) => setColors(e.target.value)}
+                    placeholder="Ex: #FF0000, #000000"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Instruções Extras</label>
+                  <input
+                    type="text"
+                    value={extraInstructions}
+                    onChange={(e) => setExtraInstructions(e.target.value)}
+                    placeholder="Ex: Sempre usar fontes em negrito"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                  />
+                </div>
+              </div>
             </div>
 
             <div>
@@ -236,6 +297,10 @@ export default function StyleManagement() {
                   setIsAdding(false);
                   setUploadedImages([]);
                   setNewStyleName('');
+                  setAudience('');
+                  setTone('');
+                  setColors('');
+                  setExtraInstructions('');
                   setError('');
                 }}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -285,6 +350,14 @@ export default function StyleManagement() {
                   Estilos Aprendidos
                 </p>
                 <div className="space-y-2">
+                  {style.metadata && (style.metadata.audience || style.metadata.tone || style.metadata.colors || style.metadata.extraInstructions) && (
+                    <div className="mb-3 pb-2 border-b border-purple-200">
+                      {style.metadata.audience && <p className="text-xs text-gray-600"><strong>Público:</strong> {style.metadata.audience}</p>}
+                      {style.metadata.tone && <p className="text-xs text-gray-600"><strong>Tom:</strong> {style.metadata.tone}</p>}
+                      {style.metadata.colors && <p className="text-xs text-gray-600"><strong>Cores:</strong> {style.metadata.colors}</p>}
+                      {style.metadata.extraInstructions && <p className="text-xs text-gray-600"><strong>Extras:</strong> {style.metadata.extraInstructions}</p>}
+                    </div>
+                  )}
                   {style.cover?.styleDescription && <p className="text-xs text-gray-600 line-clamp-2" title={style.cover.styleDescription}><strong>Capa:</strong> {style.cover.styleDescription}</p>}
                   {style.content?.styleDescription && <p className="text-xs text-gray-600 line-clamp-2" title={style.content.styleDescription}><strong>Meio:</strong> {style.content.styleDescription}</p>}
                   {style.cta?.styleDescription && <p className="text-xs text-gray-600 line-clamp-2" title={style.cta.styleDescription}><strong>CTA:</strong> {style.cta.styleDescription}</p>}

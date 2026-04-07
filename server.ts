@@ -57,7 +57,7 @@ async function startServer() {
     try {
       const { id, values, metadata } = req.body;
       const index = pc.index(INDEX_NAME);
-      await index.upsert([{ id, values, metadata }]);
+      await index.upsert({ records: [{ id, values, metadata }] });
       res.json({ success: true });
     } catch (error: any) {
       console.error("Pinecone upsert error:", error);
