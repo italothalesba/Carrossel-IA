@@ -36,6 +36,7 @@ export default function CarouselCreation() {
   } | null>(null);
   const [isLearning, setIsLearning] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [generationStatus, setGenerationStatus] = useState<string | null>(null);
 
   useEffect(() => {
     // Listen to Firestore for styles
@@ -114,13 +115,15 @@ export default function CarouselCreation() {
 
   const generateWithStyle = async (style: StyleData) => {
     setSlides([]);
+    setGenerationStatus("Iniciando pipeline de geração...");
 
     try {
       // 1. Generate text content and image prompts
-      const generatedSlides = await generateCarouselContent(content, style);
+      const generatedSlides = await generateCarouselContent(content, style, setGenerationStatus);
       setSlides(generatedSlides);
 
       // 2. Generate images for each slide with specific slide type
+      setGenerationStatus("Gerando imagens finais...");
       const slidesWithImages = await Promise.all(
         generatedSlides.map(async (slide, index) => {
           try {
@@ -159,6 +162,7 @@ export default function CarouselCreation() {
       setError(err.message || 'Erro ao gerar carrossel.');
     } finally {
       setIsGenerating(false);
+      setGenerationStatus(null);
     }
   };
 
@@ -356,7 +360,7 @@ export default function CarouselCreation() {
                 {isGenerating ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
-                    <span>Gerando...</span>
+                    <span>Processando...</span>
                   </>
                 ) : (
                   <span>GERAR CARROSSEL</span>
@@ -371,6 +375,13 @@ export default function CarouselCreation() {
                 <span>✨ Auto-Selecionar Estilo</span>
               </button>
             </div>
+            
+            {generationStatus && (
+              <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-lg flex items-start space-x-3 animate-in fade-in">
+                <Loader2 size={16} className="text-purple-600 animate-spin mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-purple-800 font-medium">{generationStatus}</p>
+              </div>
+            )}
           </div>
         </div>
 

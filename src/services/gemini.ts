@@ -245,7 +245,11 @@ export async function extractStyleFromImages(categorized: CategorizedImages, nam
   };
 }
 
-export async function generateCarouselContent(content: string, style: StyleData): Promise<SlideContent[]> {
+export async function generateCarouselContent(
+  content: string, 
+  style: StyleData,
+  onProgress?: (status: string) => void
+): Promise<SlideContent[]> {
   const ai = getAi();
   
   const styleContext = `
@@ -258,31 +262,85 @@ export async function generateCarouselContent(content: string, style: StyleData)
   CTA Style: ${style.cta.styleDescription}
   `;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
-    contents: {
-      parts: [
-        { text: `Based on the following content and the visual style context, generate a 4-slide Instagram carousel.\n\nContent:\n${content}\n\nStyle Context:\n${styleContext}\n\nSlide 1: Hook/Title\nSlide 2 & 3: Development/Main points\nSlide 4: Conclusion/Call to Action\n\nFor each slide, provide a short title, the main text (keep it concise for an image), and a detailed prompt for an AI image generator to create the background/main graphic for this slide, incorporating the visual style context.` }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            text: { type: Type.STRING },
-            imagePrompt: { type: Type.STRING }
-          },
-          required: ["title", "text", "imagePrompt"]
-        }
+  const schemaConfig = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          text: { type: Type.STRING },
+          imagePrompt: { type: Type.STRING }
+        },
+        required: ["title", "text", "imagePrompt"]
       }
     }
+  };
+
+  // Agent 1: Diagrammer
+  if (onProgress) onProgress("Agente Diagramador: Estruturando o conteúdo em 4 slides...");
+  const diagrammerPrompt = `You are an expert Content Diagrammer for Instagram carousels.
+Convert the following raw content into a 4-slide carousel structure.
+Slide 1: Hook/Title
+Slide 2 & 3: Development/Main points
+Slide 4: Conclusion/Call to Action
+
+Content:
+${content}
+
+Output a JSON array with 4 objects containing 'title', 'text' (concise), and a basic 'imagePrompt'.`;
+
+  const diagrammerResponse = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: diagrammerPrompt,
+    config: schemaConfig as any
+  });
+  const diagrammerOutput = diagrammerResponse.text;
+
+  // Agent 2: Reviewer
+  if (onProgress) onProgress("Agente Revisor: Corrigindo ortografia, gramática e fluxo...");
+  const reviewerPrompt = `You are an expert Copywriter and Proofreader.
+Review the following 4-slide carousel content.
+Fix any spelling, grammar, or punctuation errors. Ensure the text is concise, engaging, and flows logically from slide to slide.
+Keep the exact same JSON structure.
+
+Draft Carousel Content:
+${diagrammerOutput}
+
+Output the corrected JSON array.`;
+
+  const reviewerResponse = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: reviewerPrompt,
+    config: schemaConfig as any
+  });
+  const reviewerOutput = reviewerResponse.text;
+
+  // Agent 3: Designer
+  if (onProgress) onProgress("Agente Designer: Refinando prompts visuais para combinar com o estilo...");
+  const designerPrompt = `You are an expert Art Director and Prompt Engineer.
+Review the following 4-slide carousel content and the provided Style Context.
+Your job is to rewrite ONLY the 'imagePrompt' for each slide to ensure it perfectly captures the requested visual style, brand colors, and layout instructions.
+Make the 'imagePrompt' highly detailed for an AI image generator.
+DO NOT change the 'title' or 'text' fields.
+
+Style Context:
+${styleContext}
+
+Reviewed Carousel Content:
+${reviewerOutput}
+
+Output the final JSON array.`;
+
+  const designerResponse = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: designerPrompt,
+    config: schemaConfig as any
   });
 
-  return JSON.parse(response.text || "[]");
+  if (onProgress) onProgress("Finalizando...");
+  return JSON.parse(designerResponse.text || "[]");
 }
 
 export async function generateSlideImage(prompt: string, style: StyleData, slideType: 'cover' | 'content' | 'cta'): Promise<string> {

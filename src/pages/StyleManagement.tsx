@@ -4,6 +4,7 @@ import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPine
 import { set } from 'idb-keyval';
 import { db, collection, query, onSnapshot, doc, setDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
 import { serverTimestamp } from 'firebase/firestore';
+import { compressImage } from '../lib/utils';
 
 interface UploadedImage {
   id: string;
@@ -50,12 +51,19 @@ export default function StyleManagement() {
     const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
 
+    if (uploadedImages.length + files.length > 15) {
+      setError('Você pode enviar no máximo 15 imagens de referência por estilo para evitar limites de armazenamento.');
+      return;
+    }
+
     const newImages: UploadedImage[] = await Promise.all(files.map(async (file) => {
       const base64 = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
         reader.readAsDataURL(file);
       });
+      
+      const compressedBase64 = await compressImage(base64, 512, 512, 0.6);
 
       const lowerName = file.name.toLowerCase();
       let category: 'cover' | 'content' | 'cta' = 'content';
@@ -67,7 +75,7 @@ export default function StyleManagement() {
 
       return {
         id: Math.random().toString(36).substring(7),
-        base64,
+        base64: compressedBase64,
         name: file.name,
         project,
         category
@@ -86,8 +94,11 @@ export default function StyleManagement() {
       reader.onloadend = () => resolve(reader.result as string);
       reader.readAsDataURL(file);
     });
-    if (type === 'logo') setLogoImage(base64);
-    if (type === 'background') setBackgroundImage(base64);
+    
+    const compressedBase64 = await compressImage(base64, 512, 512, 0.6);
+    
+    if (type === 'logo') setLogoImage(compressedBase64);
+    if (type === 'background') setBackgroundImage(compressedBase64);
   };
 
   const updateImageCategory = (id: string, category: 'cover' | 'content' | 'cta') => {
@@ -346,7 +357,9 @@ export default function StyleManagement() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Imagens de Referência (Capa, Meio, CTA)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Imagens de Referência ({uploadedImages.length}/15)
+              </label>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 md:p-8 text-center hover:bg-gray-50 transition-colors">
                 <input
                   type="file"
@@ -355,10 +368,15 @@ export default function StyleManagement() {
                   onChange={handleImageUpload}
                   className="hidden"
                   id="image-upload"
+                  disabled={uploadedImages.length >= 15}
                 />
-                <label htmlFor="image-upload" className="cursor-pointer flex flex-col items-center">
+                <label htmlFor="image-upload" className={`flex flex-col items-center ${uploadedImages.length >= 15 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
                   <Upload className="text-gray-400 mb-3" size={32} />
-                  <span className="text-sm text-gray-600">Selecione as imagens dos seus projetos anteriores</span>
+                  <span className="text-sm text-gray-600">
+                    {uploadedImages.length >= 15 
+                      ? 'Limite de 15 imagens atingido' 
+                      : 'Selecione as imagens dos seus projetos anteriores'}
+                  </span>
                   <span className="text-xs text-gray-400 mt-1">O sistema tentará agrupar pelo nome do arquivo</span>
                 </label>
               </div>
