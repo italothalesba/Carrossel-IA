@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown, ImagePlus } from 'lucide-react';
-import { generateCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone } from '../services/gemini';
+import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown, ImagePlus, UserCheck, Check, Plus } from 'lucide-react';
+import { draftCarouselContent, refineCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone, DraftResponse } from '../services/gemini';
 import { cn } from '../lib/utils';
-import { get, set } from 'idb-keyval';
-import { db, collection, query, onSnapshot, doc, updateDoc, OperationType, handleFirestoreError } from '../firebase';
+import { db, auth, collection, query, onSnapshot, doc, setDoc, updateDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
+import { orderBy, limit } from 'firebase/firestore';
 
 interface SlideFeedback {
   status: 'approved' | 'rejected';
@@ -38,6 +38,11 @@ export default function CarouselCreation() {
   const [successMessage, setSuccessMessage] = useState('');
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
 
+  // New state for multi-agent workflow
+  const [step, setStep] = useState<'input' | 'draft' | 'generating_images' | 'done'>('input');
+  const [draftData, setDraftData] = useState<DraftResponse | null>(null);
+  const [userConsiderations, setUserConsiderations] = useState('');
+
   useEffect(() => {
     // Listen to Firestore for styles
     const q = query(collection(db, 'styles'));
@@ -52,19 +57,45 @@ export default function CarouselCreation() {
       }
     });
 
-    const loadHistory = async () => {
-      try {
-        const savedHistory = await get('carousel_history');
-        if (savedHistory) {
-          setHistory(savedHistory);
-        }
-      } catch (err) {
-        console.error('Failed to load history from IndexedDB', err);
-      }
-    };
-    loadHistory();
+    let unsubscribeHistory: () => void;
 
-    return () => unsubscribe();
+    const loadHistory = () => {
+      if (!auth.currentUser) return;
+      
+      const historyQuery = query(
+        collection(db, 'carousel_history'),
+        orderBy('timestamp', 'desc'),
+        limit(20)
+      );
+
+      unsubscribeHistory = onSnapshot(historyQuery, (snapshot) => {
+        const historyList: CarouselHistoryItem[] = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.userId === auth.currentUser?.uid) {
+            historyList.push(data as CarouselHistoryItem);
+          }
+        });
+        setHistory(historyList);
+      }, (err) => {
+        console.error('Failed to load history from Firestore', err);
+      });
+    };
+
+    // Wait for auth to be ready
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      if (user) {
+        loadHistory();
+      } else {
+        setHistory([]);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (unsubscribeHistory) unsubscribeHistory();
+      unsubscribeAuth();
+    };
   }, []);
 
   const handleAutoSelectStyle = async () => {
@@ -81,8 +112,7 @@ export default function CarouselCreation() {
         const styleExists = styles.find(s => s.id === bestStyleId);
         if (styleExists) {
           setSelectedStyleId(bestStyleId);
-          // Auto-generate after selecting
-          await generateWithStyle(styleExists);
+          await generateDraftWithStyle(styleExists);
         } else {
           setError('Estilo encontrado no Pinecone, mas não está disponível localmente.');
           setIsGenerating(false);
@@ -110,26 +140,57 @@ export default function CarouselCreation() {
 
     setIsGenerating(true);
     setError('');
-    await generateWithStyle(style);
+    await generateDraftWithStyle(style);
   };
 
-  const generateWithStyle = async (style: StyleData) => {
+  const generateDraftWithStyle = async (style: StyleData) => {
+    setGenerationStatus("Iniciando pipeline de agentes...");
+    try {
+      const draft = await draftCarouselContent(content, style, setGenerationStatus);
+      setDraftData(draft);
+      setStep('draft');
+    } catch (err: any) {
+      setError(err.message || 'Erro ao gerar rascunho.');
+    } finally {
+      setIsGenerating(false);
+      setGenerationStatus(null);
+    }
+  };
+
+  const handleRefine = async () => {
+    if (!userConsiderations.trim()) return;
+    const style = styles.find(s => s.id === selectedStyleId);
+    if (!style || !draftData) return;
+
+    setIsGenerating(true);
+    setError('');
+    try {
+      const refined = await refineCarouselContent(draftData.slides, draftData.managerFeedback, userConsiderations, style, setGenerationStatus);
+      setDraftData(refined);
+      setUserConsiderations('');
+    } catch (err: any) {
+      setError(err.message || 'Erro ao refinar rascunho.');
+    } finally {
+      setIsGenerating(false);
+      setGenerationStatus(null);
+    }
+  };
+
+  const handleApprove = async () => {
+    const style = styles.find(s => s.id === selectedStyleId);
+    if (!style || !draftData) return;
+
+    setStep('generating_images');
+    setGenerationStatus("Gerando imagens finais...");
     setSlides([]);
-    setGenerationStatus("Iniciando pipeline de geração...");
 
     try {
-      // 1. Generate text content and image prompts
-      const generatedSlides = await generateCarouselContent(content, style, setGenerationStatus);
-      setSlides(generatedSlides);
-
-      // 2. Generate images for each slide with specific slide type
-      setGenerationStatus("Gerando imagens finais...");
       const slidesWithImages = await Promise.all(
-        generatedSlides.map(async (slide, index) => {
+        draftData.slides.map(async (slide, index) => {
           try {
             let slideType: 'cover' | 'content' | 'cta' = 'content';
             if (index === 0) slideType = 'cover';
-            else if (index === generatedSlides.length - 1) slideType = 'cta';
+            else if (index === draftData.slides.length - 1) slideType = 'cta';
 
             const imageUrl = await generateSlideImage(slide.imagePrompt, style, slideType);
             return { ...slide, imageUrl };
@@ -145,23 +206,33 @@ export default function CarouselCreation() {
       const newId = Date.now().toString();
       setCurrentHistoryId(newId);
       
-      // Save to history
-      const historyItem: CarouselHistoryItem = {
+      const historyItem = {
         id: newId,
         timestamp: Date.now(),
         content,
         styleId: style.id,
         slides: slidesWithImages,
+        userId: auth.currentUser?.uid || 'anonymous'
       };
       
-      const newHistory = [historyItem, ...history].slice(0, 20); // Keep last 20 items
-      setHistory(newHistory);
-      await set('carousel_history', newHistory);
+      if (auth.currentUser) {
+        try {
+          await setDoc(doc(db, 'carousel_history', newId), historyItem);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, `carousel_history/${newId}`);
+        }
+      } else {
+        // Fallback for anonymous if needed, though rules require auth
+        const newHistory = [historyItem as CarouselHistoryItem, ...history].slice(0, 20);
+        setHistory(newHistory);
+      }
+      
+      setStep('done');
 
     } catch (err: any) {
-      setError(err.message || 'Erro ao gerar carrossel.');
+      setError(err.message || 'Erro ao gerar imagens.');
+      setStep('draft');
     } finally {
-      setIsGenerating(false);
       setGenerationStatus(null);
     }
   };
@@ -172,6 +243,7 @@ export default function CarouselCreation() {
     setSlides(item.slides);
     setCurrentHistoryId(item.id);
     setFeedbackState(null);
+    setStep('done');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -201,7 +273,13 @@ export default function CarouselCreation() {
       if (currentHistoryId) {
         const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: newSlides } : h);
         setHistory(newHistory);
-        await set('carousel_history', newHistory);
+        if (auth.currentUser) {
+          try {
+            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: newSlides });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.UPDATE, `carousel_history/${currentHistoryId}`);
+          }
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao regenerar imagem do slide.');
@@ -249,7 +327,13 @@ export default function CarouselCreation() {
       if (currentHistoryId) {
         const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: newSlides } : h);
         setHistory(newHistory);
-        await set('carousel_history', newHistory);
+        if (auth.currentUser) {
+          try {
+            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: newSlides });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.UPDATE, `carousel_history/${currentHistoryId}`);
+          }
+        }
       }
 
       setFeedbackState(null);
@@ -271,7 +355,13 @@ export default function CarouselCreation() {
     e.stopPropagation();
     const newHistory = history.filter(h => h.id !== id);
     setHistory(newHistory);
-    await set('carousel_history', newHistory);
+    if (auth.currentUser) {
+      try {
+        await deleteDoc(doc(db, 'carousel_history', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `carousel_history/${id}`);
+      }
+    }
   };
 
   const handleDownload = (slideIndex: number) => {
@@ -300,100 +390,206 @@ export default function CarouselCreation() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Estilo Visual</label>
-            <select
-              value={selectedStyleId}
-              onChange={(e) => setSelectedStyleId(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
-            >
-              {styles.length === 0 && <option value="">Nenhum estilo disponível</option>}
-              {styles.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
-            <div className="flex space-x-2 mb-4 border-b border-gray-200 pb-2">
-              <button
-                onClick={() => setActiveTab('text')}
-                className={cn("flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors", activeTab === 'text' ? "bg-purple-100 text-purple-700" : "text-gray-600 hover:bg-gray-100")}
-              >
-                <Type size={16} />
-                <span>Texto</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('url')}
-                className={cn("flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors", activeTab === 'url' ? "bg-purple-100 text-purple-700" : "text-gray-600 hover:bg-gray-100")}
-              >
-                <LinkIcon size={16} />
-                <span>URL</span>
-              </button>
-            </div>
-
-            {activeTab === 'text' ? (
-              <textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="Cole seu texto aqui..."
-                className="w-full h-48 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
-              />
-            ) : (
-              <input
-                type="url"
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="https://exemplo.com/artigo"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
-              />
-            )}
-
-            {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
-
-            <div className="flex flex-col space-y-3 mt-4">
-              <button
-                onClick={handleGenerate}
-                disabled={isGenerating || !content || !selectedStyleId}
-                className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium text-sm"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin" />
-                    <span>Processando...</span>
-                  </>
-                ) : (
-                  <span>GERAR CARROSSEL</span>
-                )}
-              </button>
-              
-              <button
-                onClick={handleAutoSelectStyle}
-                disabled={isGenerating || !content}
-                className="w-full flex items-center justify-center space-x-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium border border-indigo-200 text-xs"
-              >
-                <span>✨ Auto-Selecionar Estilo</span>
-              </button>
-            </div>
-            
-            {generationStatus && (
-              <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-lg flex items-start space-x-3 animate-in fade-in">
-                <Loader2 size={16} className="text-purple-600 animate-spin mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-purple-800 font-medium">{generationStatus}</p>
+          {step === 'input' && (
+            <>
+              <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Estilo Visual</label>
+                <select
+                  value={selectedStyleId}
+                  onChange={(e) => setSelectedStyleId(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
+                >
+                  {styles.length === 0 && <option value="">Nenhum estilo disponível</option>}
+                  {styles.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
               </div>
-            )}
-          </div>
+
+              <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
+                <div className="flex space-x-2 mb-4 border-b border-gray-200 pb-2">
+                  <button
+                    onClick={() => setActiveTab('text')}
+                    className={cn("flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors", activeTab === 'text' ? "bg-purple-100 text-purple-700" : "text-gray-600 hover:bg-gray-100")}
+                  >
+                    <Type size={16} />
+                    <span>Texto</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('url')}
+                    className={cn("flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors", activeTab === 'url' ? "bg-purple-100 text-purple-700" : "text-gray-600 hover:bg-gray-100")}
+                  >
+                    <LinkIcon size={16} />
+                    <span>URL</span>
+                  </button>
+                </div>
+
+                {activeTab === 'text' ? (
+                  <textarea
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder="Cole seu texto aqui..."
+                    className="w-full h-48 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
+                  />
+                ) : (
+                  <input
+                    type="url"
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder="https://exemplo.com/artigo"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
+                  />
+                )}
+
+                {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
+
+                <div className="flex flex-col space-y-3 mt-4">
+                  <button
+                    onClick={handleGenerate}
+                    disabled={isGenerating || !content || !selectedStyleId}
+                    className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-6 py-3 rounded-lg transition-colors font-medium text-sm"
+                  >
+                    {isGenerating ? (
+                      <>
+                        <Loader2 size={20} className="animate-spin" />
+                        <span>Processando...</span>
+                      </>
+                    ) : (
+                      <span>GERAR CARROSSEL</span>
+                    )}
+                  </button>
+                  
+                  <button
+                    onClick={handleAutoSelectStyle}
+                    disabled={isGenerating || !content}
+                    className="w-full flex items-center justify-center space-x-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium border border-indigo-200 text-xs"
+                  >
+                    <span>✨ Auto-Selecionar Estilo</span>
+                  </button>
+                </div>
+                
+                {generationStatus && (
+                  <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-lg flex items-start space-x-3 animate-in fade-in">
+                    <Loader2 size={16} className="text-purple-600 animate-spin mt-0.5 flex-shrink-0" />
+                    <p className="text-sm text-purple-800 font-medium">{generationStatus}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {step === 'draft' && (
+            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
+              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <UserCheck className="text-purple-600" /> Revisão do Gerente
+              </h3>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6 text-sm text-purple-900 italic">
+                "{draftData?.managerFeedback}"
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Suas Considerações</label>
+                <textarea
+                  value={userConsiderations}
+                  onChange={(e) => setUserConsiderations(e.target.value)}
+                  placeholder="Ex: Mude o título do slide 2 para algo mais chamativo..."
+                  className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleRefine}
+                  disabled={isGenerating || !userConsiderations.trim()}
+                  className="w-full flex items-center justify-center space-x-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg transition-colors font-medium text-sm"
+                >
+                  {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                  <span>Refazer com Considerações</span>
+                </button>
+                
+                <button
+                  onClick={handleApprove}
+                  disabled={isGenerating}
+                  className="w-full flex items-center justify-center space-x-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white px-6 py-3 rounded-lg transition-colors font-medium text-sm"
+                >
+                  {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
+                  <span>Aprovar e Gerar Imagens</span>
+                </button>
+              </div>
+
+              {generationStatus && (
+                <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-lg flex items-start space-x-3 animate-in fade-in">
+                  <Loader2 size={16} className="text-purple-600 animate-spin mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-purple-800 font-medium">{generationStatus}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(step === 'generating_images' || step === 'done') && (
+            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">Status</h3>
+              
+              {step === 'generating_images' ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <Loader2 size={40} className="text-purple-600 animate-spin mb-4" />
+                  <p className="text-sm text-gray-600 font-medium">{generationStatus}</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <div className="bg-green-50 text-green-800 p-4 rounded-lg text-sm font-medium flex items-center gap-2">
+                    <Check size={18} /> Carrossel gerado com sucesso!
+                  </div>
+                  <button
+                    onClick={() => {
+                      setStep('input');
+                      setSlides([]);
+                      setDraftData(null);
+                      setUserConsiderations('');
+                    }}
+                    className="w-full flex items-center justify-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg transition-colors font-medium text-sm"
+                  >
+                    <Plus size={18} />
+                    <span>Criar Novo Carrossel</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="lg:col-span-2">
           <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200 min-h-[400px]">
-            <h2 className="text-xl font-semibold mb-6">Pré-visualização (3:4)</h2>
+            <h2 className="text-xl font-semibold mb-6">
+              {step === 'draft' ? 'Rascunho dos Slides' : 'Pré-visualização (3:4)'}
+            </h2>
             
-            {slides.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
-                {slides.map((slide, idx) => {
-                  return (
-                    <div key={idx} className="flex flex-col gap-3">
+            {step === 'draft' && draftData && (
+              <div className="flex flex-col gap-6">
+                {draftData.slides.map((slide, idx) => (
+                  <div key={idx} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row">
+                    <div className="bg-purple-50 p-4 md:w-1/3 border-b md:border-b-0 md:border-r border-gray-200 flex flex-col justify-center items-center text-center">
+                      <div className="bg-purple-200 text-purple-800 text-sm font-bold px-3 py-1 rounded-full mb-3">
+                        Slide {idx + 1}
+                      </div>
+                      <ImageIcon className="text-purple-300 mb-2" size={32} />
+                      <p className="text-xs text-purple-600 italic px-2">{slide.imagePrompt}</p>
+                    </div>
+                    <div className="p-5 md:w-2/3 flex flex-col justify-center">
+                      <h4 className="font-bold text-gray-900 text-lg mb-2">{slide.title}</h4>
+                      <p className="text-sm text-gray-700 leading-relaxed">{slide.text}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(step === 'done' || step === 'generating_images') && (
+              slides.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
+                  {slides.map((slide, idx) => {
+                    return (
+                      <div key={idx} className="flex flex-col gap-3">
                       <div className="relative aspect-[3/4] rounded-xl overflow-hidden border border-gray-200 group shadow-sm">
                         {slide.imageUrl ? (
                           <img src={slide.imageUrl} alt={`Slide ${idx + 1}`} className="absolute inset-0 w-full h-full object-cover" />
@@ -518,7 +714,8 @@ export default function CarouselCreation() {
                 <ImageIcon size={64} className="opacity-20" />
                 <p>Seus slides aparecerão aqui.</p>
               </div>
-            )}
+            )
+          )}
           </div>
         </div>
       </div>

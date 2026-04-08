@@ -245,11 +245,16 @@ export async function extractStyleFromImages(categorized: CategorizedImages, nam
   };
 }
 
-export async function generateCarouselContent(
+export interface DraftResponse {
+  slides: SlideContent[];
+  managerFeedback: string;
+}
+
+export async function draftCarouselContent(
   content: string, 
   style: StyleData,
   onProgress?: (status: string) => void
-): Promise<SlideContent[]> {
+): Promise<DraftResponse> {
   const ai = getAi();
   
   const styleContext = `
@@ -296,51 +301,173 @@ Output a JSON array with 4 objects containing 'title', 'text' (concise), and a b
     contents: diagrammerPrompt,
     config: schemaConfig as any
   });
-  const diagrammerOutput = diagrammerResponse.text;
+  let slides: SlideContent[] = JSON.parse(diagrammerResponse.text || "[]");
 
-  // Agent 2: Reviewer
-  if (onProgress) onProgress("Agente Revisor: Corrigindo ortografia, gramática e fluxo...");
-  const reviewerPrompt = `You are an expert Copywriter and Proofreader.
-Review the following 4-slide carousel content.
-Fix any spelling, grammar, or punctuation errors. Ensure the text is concise, engaging, and flows logically from slide to slide.
-Keep the exact same JSON structure.
+  // Agent 2: Reviewer (Slide by Slide)
+  if (onProgress) onProgress("Agente Revisor: Analisando ortografia rigorosamente slide por slide...");
+  slides = await Promise.all(slides.map(async (slide, index) => {
+    const prompt = `Você é um Revisor Ortográfico Sênior nativo do Brasil.
+Revise rigorosamente o texto deste slide. Corrija QUALQUER erro de português, pontuação ou gramática.
+Melhore a fluidez, mas mantenha o texto conciso e impactante para redes sociais.
+Slide ${index + 1}:
+Título: ${slide.title}
+Texto: ${slide.text}
 
-Draft Carousel Content:
-${diagrammerOutput}
+Retorne um JSON com 'title' e 'text' corrigidos.`;
+    const res = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: prompt,
+      config: { 
+        responseMimeType: "application/json", 
+        responseSchema: { 
+          type: Type.OBJECT, 
+          properties: { title: { type: Type.STRING }, text: { type: Type.STRING } } 
+        } 
+      }
+    });
+    const corrected = JSON.parse(res.text || "{}");
+    return { ...slide, title: corrected.title || slide.title, text: corrected.text || slide.text };
+  }));
 
-Output the corrected JSON array.`;
-
-  const reviewerResponse = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
-    contents: reviewerPrompt,
-    config: schemaConfig as any
-  });
-  const reviewerOutput = reviewerResponse.text;
-
-  // Agent 3: Designer
-  if (onProgress) onProgress("Agente Designer: Refinando prompts visuais para combinar com o estilo...");
-  const designerPrompt = `You are an expert Art Director and Prompt Engineer.
-Review the following 4-slide carousel content and the provided Style Context.
-Your job is to rewrite ONLY the 'imagePrompt' for each slide to ensure it perfectly captures the requested visual style, brand colors, and layout instructions.
-Make the 'imagePrompt' highly detailed for an AI image generator.
-DO NOT change the 'title' or 'text' fields.
+  // Agent 3: Designer (Slide by Slide)
+  if (onProgress) onProgress("Agente Designer: Definindo visual de cada slide (foco em cores sólidas)...");
+  slides = await Promise.all(slides.map(async (slide, index) => {
+    const prompt = `Você é um Diretor de Arte Sênior.
+O usuário relatou problemas com "cores de background embaralhadas".
+Sua tarefa é escrever um 'imagePrompt' detalhado para este slide.
+Regra 1: Defina UMA cor de background principal e clara baseada no Style Context. NÃO misture cores no fundo.
+Regra 2: Siga rigorosamente o Style Context.
+Regra 3: O prompt deve ser em inglês para o gerador de imagens.
 
 Style Context:
 ${styleContext}
 
-Reviewed Carousel Content:
-${reviewerOutput}
+Slide ${index + 1} Content:
+Title: ${slide.title}
+Text: ${slide.text}
 
-Output the final JSON array.`;
+Retorne um JSON apenas com o 'imagePrompt' atualizado.`;
+    const res = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: prompt,
+      config: { 
+        responseMimeType: "application/json", 
+        responseSchema: { 
+          type: Type.OBJECT, 
+          properties: { imagePrompt: { type: Type.STRING } } 
+        } 
+      }
+    });
+    const designed = JSON.parse(res.text || "{}");
+    return { ...slide, imagePrompt: designed.imagePrompt || slide.imagePrompt };
+  }));
 
-  const designerResponse = await ai.models.generateContent({
+  // Agent 4: Manager
+  if (onProgress) onProgress("Agente Gerente Topzão: Fazendo a revisão geral final...");
+  const managerPrompt = `Você é o "Gerente Topzão" de Qualidade.
+Revise estes 4 slides (textos e prompts de imagem).
+Avalie rigorosamente:
+1. A ortografia está impecável (PT-BR)?
+2. Os prompts de imagem estão com cores de background consistentes e não embaralhadas?
+3. O conteúdo flui bem?
+
+Se encontrar erros, corrija-os diretamente nos slides.
+Forneça um feedback crítico, profissional e direto para o usuário sobre o que você achou do resultado e o que ajustou.
+
+CRITICAL INSTRUCTION: You MUST return EXACTLY 4 slides in the 'slides' array. Do not return 1 slide. Return all 4 slides.
+
+Slides atuais:
+${JSON.stringify(slides, null, 2)}
+
+Retorne um JSON com:
+{
+  "slides": [array com EXATAMENTE 4 slides possivelmente corrigidos],
+  "managerFeedback": "Seu feedback para o usuário"
+}`;
+
+  const managerResponse = await ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
-    contents: designerPrompt,
-    config: schemaConfig as any
+    contents: managerPrompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          slides: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: { title: { type: Type.STRING }, text: { type: Type.STRING }, imagePrompt: { type: Type.STRING } },
+              required: ["title", "text", "imagePrompt"]
+            }
+          },
+          managerFeedback: { type: Type.STRING }
+        },
+        required: ["slides", "managerFeedback"]
+      }
+    }
   });
 
-  if (onProgress) onProgress("Finalizando...");
-  return JSON.parse(designerResponse.text || "[]");
+  return JSON.parse(managerResponse.text || "{}");
+}
+
+export async function refineCarouselContent(
+  draftSlides: SlideContent[],
+  managerFeedback: string,
+  userConsiderations: string,
+  style: StyleData,
+  onProgress?: (status: string) => void
+): Promise<DraftResponse> {
+  const ai = getAi();
+  if (onProgress) onProgress("Agente Gerente Topzão: Aplicando suas considerações...");
+
+  const prompt = `Você é o "Gerente Topzão" de Qualidade.
+O usuário revisou o rascunho do carrossel e deixou as seguintes considerações:
+"${userConsiderations}"
+
+Feedback anterior do gerente:
+"${managerFeedback}"
+
+Slides atuais:
+${JSON.stringify(draftSlides, null, 2)}
+
+Sua tarefa:
+1. Aplique as considerações do usuário aos slides (textos ou prompts de imagem).
+2. Garanta que a ortografia continue impecável e as cores de background não se embaralhem.
+3. Forneça um novo feedback confirmando as alterações.
+
+CRITICAL INSTRUCTION: You MUST return EXACTLY 4 slides in the 'slides' array. Do not return 1 slide. Return all 4 slides.
+
+Retorne um JSON com:
+{
+  "slides": [array com EXATAMENTE 4 slides atualizados],
+  "managerFeedback": "Seu novo feedback para o usuário"
+}`;
+
+  const res = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          slides: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: { title: { type: Type.STRING }, text: { type: Type.STRING }, imagePrompt: { type: Type.STRING } },
+              required: ["title", "text", "imagePrompt"]
+            }
+          },
+          managerFeedback: { type: Type.STRING }
+        },
+        required: ["slides", "managerFeedback"]
+      }
+    }
+  });
+
+  return JSON.parse(res.text || "{}");
 }
 
 export async function generateSlideImage(prompt: string, style: StyleData, slideType: 'cover' | 'content' | 'cta'): Promise<string> {
