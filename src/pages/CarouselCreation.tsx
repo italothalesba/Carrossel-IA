@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown, ImagePlus, UserCheck, Check, Plus } from 'lucide-react';
 import { draftCarouselContent, refineCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone, DraftResponse } from '../services/gemini';
-import { cn } from '../lib/utils';
-import { db, auth, collection, query, onSnapshot, doc, setDoc, updateDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
+import { cn, compressImage } from '../lib/utils';
+import { db, auth, collection, query, where, onSnapshot, doc, setDoc, updateDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
 import { orderBy, limit } from 'firebase/firestore';
 
 interface SlideFeedback {
@@ -64,6 +64,7 @@ export default function CarouselCreation() {
       
       const historyQuery = query(
         collection(db, 'carousel_history'),
+        where('userId', '==', auth.currentUser.uid),
         orderBy('timestamp', 'desc'),
         limit(20)
       );
@@ -206,12 +207,14 @@ export default function CarouselCreation() {
       const newId = Date.now().toString();
       setCurrentHistoryId(newId);
       
+      const historySlides = await compressSlidesForHistory(slidesWithImages);
+
       const historyItem = {
         id: newId,
         timestamp: Date.now(),
         content,
         styleId: style.id,
-        slides: slidesWithImages,
+        slides: historySlides,
         userId: auth.currentUser?.uid || 'anonymous'
       };
       
@@ -247,6 +250,19 @@ export default function CarouselCreation() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const compressSlidesForHistory = async (slidesList: any[]) => {
+    return await Promise.all(slidesList.map(async (s) => {
+      if (s.imageUrl && s.imageUrl.startsWith('data:image')) {
+        try {
+          return { ...s, imageUrl: await compressImage(s.imageUrl, 400, 400, 0.5) };
+        } catch (e) {
+          return s;
+        }
+      }
+      return s;
+    }));
+  };
+
   const handleRegenerateSlideImage = async (slideIndex: number) => {
     const style = styles.find(s => s.id === selectedStyleId);
     if (!style) {
@@ -271,11 +287,12 @@ export default function CarouselCreation() {
       setSlides(newSlides);
 
       if (currentHistoryId) {
-        const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: newSlides } : h);
+        const historySlides = await compressSlidesForHistory(newSlides);
+        const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: historySlides } : h);
         setHistory(newHistory);
         if (auth.currentUser) {
           try {
-            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: newSlides });
+            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: historySlides });
           } catch (err) {
             handleFirestoreError(err, OperationType.UPDATE, `carousel_history/${currentHistoryId}`);
           }
@@ -325,11 +342,12 @@ export default function CarouselCreation() {
       setSlides(newSlides);
 
       if (currentHistoryId) {
-        const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: newSlides } : h);
+        const historySlides = await compressSlidesForHistory(newSlides);
+        const newHistory = history.map(h => h.id === currentHistoryId ? { ...h, slides: historySlides } : h);
         setHistory(newHistory);
         if (auth.currentUser) {
           try {
-            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: newSlides });
+            await updateDoc(doc(db, 'carousel_history', currentHistoryId), { slides: historySlides });
           } catch (err) {
             handleFirestoreError(err, OperationType.UPDATE, `carousel_history/${currentHistoryId}`);
           }

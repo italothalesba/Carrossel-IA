@@ -4,14 +4,16 @@
  */
 
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ImagePlus, FileDown, Wifi, WifiOff, Loader2, Database, Menu, X } from 'lucide-react';
+import { LayoutDashboard, ImagePlus, FileDown, Wifi, WifiOff, Loader2, Database, Menu, X, LogOut } from 'lucide-react';
 import StyleManagement from './pages/StyleManagement';
 import CarouselCreation from './pages/CarouselCreation';
 import ApiKeyGate from './components/ApiKeyGate';
 import { cn } from './lib/utils';
 import { generateMasterPromptPDF } from './lib/pdfGenerator';
 import { useState, useEffect } from 'react';
-import { db, doc, getDocFromServer } from './firebase';
+import { db, doc, getDocFromServer, auth, onAuthStateChanged, User, googleProvider, signInWithPopup } from './firebase';
+import Login from './components/Login';
+import { signOut } from 'firebase/auth';
 
 function ConnectionStatus() {
   const [pineconeStatus, setPineconeStatus] = useState<'loading' | 'online' | 'offline'>('loading');
@@ -107,6 +109,16 @@ function Sidebar({ onClose }: { onClose?: () => void }) {
             </Link>
           );
         })}
+        
+        <div className="pt-4 mt-4 border-t border-gray-800">
+          <button
+            onClick={() => signOut(auth)}
+            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-400 hover:bg-red-900/20 hover:text-red-400"
+          >
+            <LogOut size={20} />
+            <span className="font-medium">Sair da Conta</span>
+          </button>
+        </div>
       </nav>
       <div className="p-4 border-t border-gray-800">
         <button
@@ -173,6 +185,29 @@ function AppLayout() {
 }
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-900">
+        <Loader2 className="text-purple-500 animate-spin" size={48} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <BrowserRouter>
       <AppLayout />

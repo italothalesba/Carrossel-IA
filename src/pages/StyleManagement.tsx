@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, Plus, Loader2, Trash2, GripVertical, Pencil } from 'lucide-react';
 import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPinecone } from '../services/gemini';
 import { set } from 'idb-keyval';
-import { db, collection, query, onSnapshot, doc, setDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
+import { db, auth, collection, query, onSnapshot, doc, setDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
 import { serverTimestamp } from 'firebase/firestore';
 import { compressImage } from '../lib/utils';
 
@@ -24,6 +24,7 @@ export default function StyleManagement() {
   const [extraInstructions, setExtraInstructions] = useState('');
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState('');
   const [error, setError] = useState('');
   const [editingStyleId, setEditingStyleId] = useState<string | null>(null);
   const [logoImage, setLogoImage] = useState<string | null>(null);
@@ -51,12 +52,10 @@ export default function StyleManagement() {
     const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
 
-    if (uploadedImages.length + files.length > 15) {
-      setError('Você pode enviar no máximo 15 imagens de referência por estilo para evitar limites de armazenamento.');
-      return;
-    }
+    const newImages: UploadedImage[] = [];
+    let duplicateCount = 0;
 
-    const newImages: UploadedImage[] = await Promise.all(files.map(async (file) => {
+    for (const file of files) {
       const base64 = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
@@ -64,6 +63,15 @@ export default function StyleManagement() {
       });
       
       const compressedBase64 = await compressImage(base64, 512, 512, 0.6);
+
+      // Check if image already exists in current upload list
+      const isDuplicate = uploadedImages.some(img => img.base64 === compressedBase64) || 
+                          newImages.some(img => img.base64 === compressedBase64);
+
+      if (isDuplicate) {
+        duplicateCount++;
+        continue;
+      }
 
       const lowerName = file.name.toLowerCase();
       let category: 'cover' | 'content' | 'cta' = 'content';
@@ -73,14 +81,19 @@ export default function StyleManagement() {
       const projectMatch = file.name.match(/^([a-zA-Z0-9]+)[-_]/);
       const project = projectMatch ? projectMatch[1] : 'Projeto Padrão';
 
-      return {
+      newImages.push({
         id: Math.random().toString(36).substring(7),
         base64: compressedBase64,
         name: file.name,
         project,
         category
-      };
-    }));
+      });
+    }
+
+    if (duplicateCount > 0) {
+      setError(`${duplicateCount} imagem(ns) repetida(s) foram ignorada(s).`);
+      setTimeout(() => setError(''), 5000);
+    }
 
     setUploadedImages(prev => [...prev, ...newImages]);
     setImagesChanged(true);
@@ -126,6 +139,7 @@ export default function StyleManagement() {
     }
 
     setIsAnalyzing(true);
+    setAnalysisStatus('Iniciando análise...');
     setError('');
     try {
       let existingStyle = editingStyleId ? styles.find(s => s.id === editingStyleId) : null;
@@ -145,11 +159,14 @@ export default function StyleManagement() {
           extraInstructions: extraInstructions.trim(),
         };
 
-        styleData = await extractStyleFromImages(categorized, newStyleName, metadata);
+        styleData = await extractStyleFromImages(categorized, newStyleName, metadata, (status) => {
+          setAnalysisStatus(status);
+        });
         if (existingStyle) {
           styleData.id = existingStyle.id;
         }
       } else {
+        setAnalysisStatus('Atualizando metadados...');
         styleData = {
           ...existingStyle,
           name: newStyleName,
@@ -167,10 +184,11 @@ export default function StyleManagement() {
         background: backgroundImage || undefined,
       };
 
+      setAnalysisStatus('Sincronizando com o banco de dados...');
       // Save to Firestore
       const styleDoc = {
         ...styleData,
-        createdBy: existingStyle?.createdBy || 'anonymous',
+        createdBy: auth.currentUser?.uid || 'anonymous',
         createdAt: existingStyle?.createdAt || serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -192,6 +210,7 @@ export default function StyleManagement() {
       setError(err.message || 'Erro ao analisar imagens.');
     } finally {
       setIsAnalyzing(false);
+      setAnalysisStatus('');
     }
   };
 
@@ -358,7 +377,7 @@ export default function StyleManagement() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Imagens de Referência ({uploadedImages.length}/15)
+                Imagens de Referência ({uploadedImages.length})
               </label>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 md:p-8 text-center hover:bg-gray-50 transition-colors">
                 <input
@@ -368,16 +387,13 @@ export default function StyleManagement() {
                   onChange={handleImageUpload}
                   className="hidden"
                   id="image-upload"
-                  disabled={uploadedImages.length >= 15}
                 />
-                <label htmlFor="image-upload" className={`flex flex-col items-center ${uploadedImages.length >= 15 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                <label htmlFor="image-upload" className="flex flex-col items-center cursor-pointer">
                   <Upload className="text-gray-400 mb-3" size={32} />
                   <span className="text-sm text-gray-600">
-                    {uploadedImages.length >= 15 
-                      ? 'Limite de 15 imagens atingido' 
-                      : 'Selecione as imagens dos seus projetos anteriores'}
+                    Selecione as imagens dos seus projetos anteriores
                   </span>
-                  <span className="text-xs text-gray-400 mt-1">O sistema tentará agrupar pelo nome do arquivo</span>
+                  <span className="text-xs text-gray-400 mt-1">O sistema aprenderá cada imagem individualmente</span>
                 </label>
               </div>
             </div>
@@ -444,7 +460,10 @@ export default function StyleManagement() {
                 {isAnalyzing ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
-                    <span className="text-sm">Salvando...</span>
+                    <div className="flex flex-col items-start">
+                      <span className="text-sm font-bold">Analisando...</span>
+                      <span className="text-[10px] opacity-80">{analysisStatus}</span>
+                    </div>
                   </>
                 ) : (
                   <span>{editingStyleId ? "Salvar Alterações" : "Iniciar Aprendizado"}</span>

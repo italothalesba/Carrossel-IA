@@ -73,27 +73,50 @@ export interface SlideContent {
   imagePrompt: string;
 }
 
-async function analyzeCategory(ai: any, images: string[], categoryName: string): Promise<SlideStyleDetail> {
-  if (!images || images.length === 0) return { imagesBase64: [], styleDescription: "" };
-  
-  const imageParts = images.map((base64: string) => ({
+async function incrementalLearnStyle(
+  ai: any,
+  image: string,
+  category: string,
+  currentDescription: string
+): Promise<string> {
+  const imagePart = {
     inlineData: {
-      data: base64.split(',')[1],
-      mimeType: base64.split(',')[0].split(':')[1].split(';')[0],
+      data: image.split(',')[1],
+      mimeType: image.split(',')[0].split(':')[1].split(';')[0],
     }
-  }));
+  };
+
+  const prompt = `
+AJA COMO UM DIRETOR DE ARTE E DESIGNER GRÁFICO SÊNIOR.
+Sua tarefa é realizar um aprendizado incremental de estilo visual para um slide de ${category.toUpperCase()}.
+
+ESTRUTURA ATUAL APRENDIDA:
+${currentDescription || "Nenhuma descrição prévia."}
+
+INSTRUÇÃO:
+Analise a nova imagem de referência fornecida e ACRESCENTE detalhes à descrição acima. Você deve ser 100% preciso e rigoroso, nunca esquecendo o que já foi aprendido, apenas somando novas nuances, texturas, regras de composição e detalhes técnicos.
+
+Siga rigorosamente esta hierarquia visual para a descrição consolidada:
+1. FUNDO E NEGATIVO: Detalhes de cores, padrões (ex: motherboard traces), marcas d'água translúcidas.
+2. ELEMENTO TOPO: Texturas realistas (metal, ferrugem), formas, tipografia interna.
+3. TARJAS DE MENSAGEM: Cores exatas, fontes, regras de escalonamento para impacto psicológico.
+4. PONTO FOCAL CENTRAL: Metáforas visuais, mistura de Flat Vector e Realismo Macro.
+5. PARTÍCULAS E ÍCONES: Elementos flutuantes, transparências, volumes.
+6. RODAPÉ INSTITUCIONAL: Formatos (pill form), ícones 3D, tipografia minimalista.
+
+ESTILO FINAL: Especifique separação entre elementos, balanço vertical e nitidez 8k.
+
+Retorne APENAS a descrição de estilo consolidada, ultra-detalhada e técnica em Português.
+  `;
 
   const response = await ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
     contents: {
-      parts: [
-        ...imageParts,
-        { text: `Analyze these reference images for a carousel ${categoryName} slide. Provide a highly detailed prompt describing their exact visual style, layout structure, text placement areas, color palette (with hex codes), lighting, and mood. This description will be used to instruct an AI image generator to replicate this exact style for a ${categoryName} slide. Be extremely descriptive about the aesthetics and composition.` }
-      ]
+      parts: [imagePart, { text: prompt }]
     }
   });
 
-  return { imagesBase64: images, styleDescription: response.text || "" };
+  return response.text || currentDescription;
 }
 
 export async function embedText(text: string): Promise<number[]> {
@@ -117,30 +140,36 @@ export async function learnFromFeedback(
 ): Promise<StyleData> {
   const ai = getAi();
   const prompt = `
-You are an expert AI design assistant.
-We are refining a visual style named "${style.name}".
+AJA COMO UM DIRETOR DE ARTE E DESIGNER GRÁFICO SÊNIOR.
+Estamos refinando o aprendizado visual do estilo "${style.name}" para o tipo de slide: ${slideType.toUpperCase()}.
 
-Current ${slideType} style description:
+DESCRIÇÃO ATUAL DO ESTILO (${slideType}):
 ${style[slideType].styleDescription}
 
-Current brand extra instructions:
-${style.metadata?.extraInstructions || 'None'}
+INSTRUÇÕES EXTRAS DA MARCA:
+${style.metadata?.extraInstructions || 'Nenhuma'}
 
-The user generated a ${slideType} slide and gave this feedback:
+FEEDBACK DO USUÁRIO:
 Status: ${status.toUpperCase()}
-User Comment: "${comment}"
+Comentário: "${comment}"
 
-Analyze the feedback. If REJECTED, add strict negative constraints or correct the style description to prevent this issue. If APPROVED, reinforce the positive aspects mentioned.
+SUA TAREFA:
+1. Analise o feedback. Se REPROVADO, identifique o que falhou na hierarquia visual (Fundo, Elemento Topo, Tarjas, Ponto Focal, Partículas ou Rodapé) e adicione restrições negativas rigorosas.
+2. Se APROVADO, reforce os elementos que funcionaram, mantendo a estrutura de "Diretor de Arte Sênior".
+3. Mantenha a descrição focada em:
+   - Hierarquia Visual (1 a 6).
+   - Contraste entre Vetor Flat e Fotografia Macro.
+   - Tipografia de impacto psicológico.
 
-Return a JSON object with the updated fields:
+Retorne um JSON:
 {
-  "updatedStyleDescription": "The new, refined style description for this slide type.",
-  "updatedExtraInstructions": "The new, refined extra instructions for the brand (keep existing ones and add new ones if needed)."
+  "updatedStyleDescription": "A nova descrição refinada seguindo o padrão rigoroso.",
+  "updatedExtraInstructions": "Novas instruções extras consolidadas."
 }
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-flash-latest',
     contents: prompt,
     config: {
       responseMimeType: 'application/json',
@@ -226,23 +255,44 @@ export async function queryStyleFromPinecone(content: string): Promise<string | 
   return null;
 }
 
-export async function extractStyleFromImages(categorized: CategorizedImages, name: string, metadata?: StyleMetadata): Promise<StyleData> {
+export async function extractStyleFromImages(
+  categorized: CategorizedImages, 
+  name: string, 
+  metadata?: StyleMetadata,
+  onProgress?: (status: string) => void
+): Promise<StyleData> {
   const ai = getAi();
   
-  const [cover, content, cta] = await Promise.all([
-    analyzeCategory(ai, categorized.cover, "Cover (Capa)"),
-    analyzeCategory(ai, categorized.content, "Content (Meio)"),
-    analyzeCategory(ai, categorized.cta, "CTA (Último Slide)")
-  ]);
-
-  return {
+  const styleData: StyleData = {
     id: Date.now().toString(),
     name,
-    cover,
-    content,
-    cta,
+    cover: { imagesBase64: categorized.cover, styleDescription: "" },
+    content: { imagesBase64: categorized.content, styleDescription: "" },
+    cta: { imagesBase64: categorized.cta, styleDescription: "" },
     metadata
   };
+
+  const totalImages = categorized.cover.length + categorized.content.length + categorized.cta.length;
+  let processedCount = 0;
+
+  const processCategory = async (images: string[], category: 'cover' | 'content' | 'cta', label: string) => {
+    for (const img of images) {
+      processedCount++;
+      if (onProgress) onProgress(`Aprendendo ${label}: Imagem ${processedCount} de ${totalImages}...`);
+      styleData[category].styleDescription = await incrementalLearnStyle(
+        ai, 
+        img, 
+        label, 
+        styleData[category].styleDescription
+      );
+    }
+  };
+
+  await processCategory(categorized.cover, 'cover', 'Capa');
+  await processCategory(categorized.content, 'content', 'Meio');
+  await processCategory(categorized.cta, 'cta', 'CTA');
+
+  return styleData;
 }
 
 export interface DraftResponse {
@@ -297,7 +347,7 @@ ${content}
 Output a JSON array with 4 objects containing 'title', 'text' (concise), and a basic 'imagePrompt'.`;
 
   const diagrammerResponse = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-flash-latest",
     contents: diagrammerPrompt,
     config: schemaConfig as any
   });
@@ -315,7 +365,7 @@ Texto: ${slide.text}
 
 Retorne um JSON com 'title' e 'text' corrigidos.`;
     const res = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-flash-latest",
       contents: prompt,
       config: { 
         responseMimeType: "application/json", 
@@ -330,25 +380,41 @@ Retorne um JSON com 'title' e 'text' corrigidos.`;
   }));
 
   // Agent 3: Designer (Slide by Slide)
-  if (onProgress) onProgress("Agente Designer: Definindo visual de cada slide (foco em cores sólidas)...");
+  if (onProgress) onProgress("Agente Designer: Aplicando modelos rigorosos de Diretor de Arte...");
   slides = await Promise.all(slides.map(async (slide, index) => {
-    const prompt = `Você é um Diretor de Arte Sênior.
-O usuário relatou problemas com "cores de background embaralhadas".
-Sua tarefa é escrever um 'imagePrompt' detalhado para este slide.
-Regra 1: Defina UMA cor de background principal e clara baseada no Style Context. NÃO misture cores no fundo.
-Regra 2: Siga rigorosamente o Style Context.
-Regra 3: O prompt deve ser em inglês para o gerador de imagens.
+    let slideType: 'cover' | 'content' | 'cta' = 'content';
+    if (index === 0) slideType = 'cover';
+    else if (index === slides.length - 1) slideType = 'cta';
 
-Style Context:
+    const prompt = `ACT AS A SENIOR ART DIRECTOR AND GRAPHIC DESIGNER. 
+Your task is to write a highly detailed 'imagePrompt' in ENGLISH for a ${slideType.toUpperCase()} slide.
+The composition must be super clean, employing extreme sharpness (8k) and strictly following this visual hierarchy:
+
+1. BACKGROUND AND NEGATIVE SPACE: Pure white background. Overlaid with an intricate pattern of 'motherboard traces' (printed circuits) in thin reddish-brown/earthy light lines. At the top, as a watermark filling the empty space, reading '[BRAND/CONTEXT]' in gigantic, translucent gray letters (partially cut off at the edges).
+2. TOP ELEMENT (MACRO PHOTOGRAPHY / REALISTIC TEXTURE): At the top, hanging, a rectangular yellow plate with rounded edges. The material simulates real metal with signs of heavy rust and wear to provide intense contrast with the rest of the art which is vectorial. Internal text centered: '[KEYWORD]' in solid black Sans-Serif Bold font.
+3. MESSAGE STRIPS (SELECTIVE TYPOGRAPHY): Solid Ocher-Yellow (#D49A00) horizontal strips with left alignment. White 'Segoe UI' or 'Roboto' Heavy font. For psychological impact, the typography is scaled:
+   - Line 1: [Common Text]
+   - Line 2: [IMPACT TEXT 1] (Massive/Colossal)
+   - Line 3: [Common Text] [IMPACT TEXT 2] (Extra Bold)
+   - Line 4: [Common Text] [IMPACT TEXT 3] (Colossal and stretched across the strip)
+4. CENTRAL FOCAL POINT (THE THREAT): Hanging from the top plate by a black metal wire, a Flat vector illustration mixed with macro realism showing a visual metaphor (e.g., a rusted metal fish hook, a digital worm with circuit patterns) that represents the core message.
+5. PARTICLES AND ICONS: Floating translucently around the entire central core, dozens of vector '[SYMBOL, e.g., Red Alert/Exclamation]' triangles giving volume to the composition.
+6. INSTITUTIONAL FOOTER: At the bottom-left, always maintain the black pill form (black pill form). Inside on the left, a black circle with the '[BRAND SYMBOL, e.g., Alpha (α)]' icon in polished 3D metallic gold texture. Right next to it in the pill: text '[COMPANY NAME, e.g., Alfa Contabilidade]' in minimalist bright white.
+7. SEAMLESS PANORAMIC CONNECTION: This is slide ${index + 1} of 4. To create a seamless swiping effect, ensure that a specific visual element (like a thick orange circuit line or a floating metallic wire) exits the RIGHT edge of this slide and enters the LEFT edge of the next slide at the exact same vertical position. This element must visually "complete" the transition between slides.
+
+STYLE AND FINAL PARAMETERS: Sub-pixel scale with obvious separation between Flat Vector and Macro Photography elements (Metal, Rust, Neon). Vertical visual balance. Extreme sharpness, 8k.
+--ar 4:5 --v 6.0 --style raw
+
+Style Context to integrate:
 ${styleContext}
 
 Slide ${index + 1} Content:
 Title: ${slide.title}
 Text: ${slide.text}
 
-Retorne um JSON apenas com o 'imagePrompt' atualizado.`;
+Return a JSON object with the 'imagePrompt' field containing the full, detailed prompt in English.`;
     const res = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-flash-latest",
       contents: prompt,
       config: { 
         responseMimeType: "application/json", 
@@ -386,7 +452,7 @@ Retorne um JSON com:
 }`;
 
   const managerResponse = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-flash-latest",
     contents: managerPrompt,
     config: {
       responseMimeType: "application/json",
@@ -421,7 +487,8 @@ export async function refineCarouselContent(
   const ai = getAi();
   if (onProgress) onProgress("Agente Gerente Topzão: Aplicando suas considerações...");
 
-  const prompt = `Você é o "Gerente Topzão" de Qualidade.
+  const prompt = `AJA COMO UM DIRETOR DE ARTE E DESIGNER GRÁFICO SÊNIOR.
+Você é o "Gerente Topzão" de Qualidade.
 O usuário revisou o rascunho do carrossel e deixou as seguintes considerações:
 "${userConsiderations}"
 
@@ -433,8 +500,17 @@ ${JSON.stringify(draftSlides, null, 2)}
 
 Sua tarefa:
 1. Aplique as considerações do usuário aos slides (textos ou prompts de imagem).
-2. Garanta que a ortografia continue impecável e as cores de background não se embaralhem.
-3. Forneça um novo feedback confirmando as alterações.
+2. Garanta que a ortografia continue impecável.
+3. CRITICAL: For any 'imagePrompt' updates, follow this strict visual hierarchy:
+   - BACKGROUND AND NEGATIVE SPACE: Pure white background. Overlaid with an intricate pattern of 'motherboard traces' (printed circuits) in thin reddish-brown/earthy light lines. At the top, as a watermark filling the empty space, reading '[BRAND/CONTEXT]' in gigantic, translucent gray letters (partially cut off at the edges).
+   - TOP ELEMENT (MACRO PHOTOGRAPHY / REALISTIC TEXTURE): At the top, hanging, a rectangular yellow plate with rounded edges. The material simulates real metal with signs of heavy rust and wear to provide intense contrast with the rest of the art which is vectorial. Internal text centered: '[KEYWORD]' in solid black Sans-Serif Bold font.
+   - MESSAGE STRIPS (SELECTIVE TYPOGRAPHY): Solid Ocher-Yellow (#D49A00) horizontal strips with left alignment. White 'Segoe UI' or 'Roboto' Heavy font. For psychological impact, the typography is scaled (Massive/Colossal/Extra Bold).
+   - CENTRAL FOCAL POINT (THE THREAT): Hanging from the top plate by a black metal wire, a Flat vector illustration mixed with macro realism showing a visual metaphor (e.g., a rusted metal fish hook, a digital worm with circuit patterns).
+   - PARTICLES AND ICONS: Floating translucently around the entire central core, dozens of vector '[SYMBOL, e.g., Red Alert/Exclamation]' triangles giving volume to the composition.
+   - INSTITUTIONAL FOOTER: At the bottom-left, always maintain the black pill form (black pill form). Inside on the left, a black circle with the '[BRAND SYMBOL, e.g., Alpha (α)]' icon in polished 3D metallic gold texture. Right next to it in the pill: text '[COMPANY NAME, e.g., Alfa Contabilidade]' in minimalist bright white.
+   - SEAMLESS FLOW: Ensure a continuous visual element (circuit line, wire, or shape) flows from the right edge of one slide to the left edge of the next to create a seamless panoramic effect.
+   - FINAL PARAMETERS: Sub-pixel scale with obvious separation between Flat Vector and Macro Photography elements (Metal, Rust, Neon). Vertical visual balance. Extreme sharpness, 8k. End with "--ar 4:5 --v 6.0 --style raw".
+4. Forneça um novo feedback confirmando as alterações.
 
 CRITICAL INSTRUCTION: You MUST return EXACTLY 4 slides in the 'slides' array. Do not return 1 slide. Return all 4 slides.
 
@@ -445,7 +521,7 @@ Retorne um JSON com:
 }`;
 
   const res = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-flash-latest",
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -474,17 +550,17 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
   const ai = getAi();
   
   let activeStyle = style[slideType];
-  if (!activeStyle || activeStyle.imagesBase64.length === 0) {
+  if (!activeStyle || !activeStyle.imagesBase64 || activeStyle.imagesBase64.length === 0) {
     activeStyle = style.content;
   }
-  if (!activeStyle || activeStyle.imagesBase64.length === 0) {
+  if (!activeStyle || !activeStyle.imagesBase64 || activeStyle.imagesBase64.length === 0) {
     activeStyle = style.cover;
   }
-  if (!activeStyle || activeStyle.imagesBase64.length === 0) {
+  if (!activeStyle || !activeStyle.imagesBase64 || activeStyle.imagesBase64.length === 0) {
     activeStyle = style.cta;
   }
 
-  const imageParts = (activeStyle.imagesBase64 || []).map((base64: string) => ({
+  const imageParts = (activeStyle?.imagesBase64 || []).map((base64: string) => ({
     inlineData: {
       data: base64.split(',')[1],
       mimeType: base64.split(',')[0].split(':')[1].split(';')[0],
@@ -511,8 +587,8 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
     assetInstructions += "\n- A BACKGROUND image is provided in the reference images. You MUST use this as the background for the slide.";
   }
 
-  const styleInstruction = activeStyle.styleDescription 
-    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}${assetInstructions}\n\n${imageParts.length > 0 ? 'Use the provided reference images and assets as a visual guide for the exact aesthetic, colors, and layout.' : 'Follow the style description strictly to maintain visual consistency.'}`
+  const styleInstruction = activeStyle?.styleDescription 
+    ? `\n\nCRITICAL INSTRUCTION: You MUST strictly follow this visual style for a ${slideType} slide:\n${activeStyle?.styleDescription}\n\nBrand Colors to use: ${style.metadata?.colors || 'Follow reference images'}\nExtra Instructions: ${style.metadata?.extraInstructions || 'None'}${assetInstructions}\n\n${imageParts.length > 0 ? 'Use the provided reference images and assets as a visual guide for the exact aesthetic, colors, and layout.' : 'Follow the style description strictly to maintain visual consistency.'}`
     : `\n\nstrictly following the visual style, colors, and layout. Brand Colors: ${style.metadata?.colors || 'Follow reference images'}. Extra Instructions: ${style.metadata?.extraInstructions || 'None'}${assetInstructions}.`;
 
   const response = await ai.models.generateContent({
@@ -525,7 +601,7 @@ export async function generateSlideImage(prompt: string, style: StyleData, slide
     },
     config: {
       imageConfig: {
-        aspectRatio: "3:4"
+        aspectRatio: "4:5"
       }
     },
   });
