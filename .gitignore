@@ -6,3 +6,4 @@ coverage/
 *.log
 .env*
 !.env.example
+-e "# API Keys files\nPROVIDERS-ADICIONADOS.md\nRELATORIO-FINAL-CORRECOES.md\ntest-api-keys.ts\n*.env.local"  
