@@ -37,7 +37,7 @@ export default function ApiKeyGate({ children }: { children: React.ReactNode }) 
         <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 max-w-md text-center">
           <h2 className="text-2xl font-bold mb-4 text-gray-900">Chave de API Necessária</h2>
           <p className="text-gray-600 mb-6">
-            Para gerar imagens de alta qualidade para os carrosséis, este aplicativo requer uma chave de API do Gemini de um projeto pago do Google Cloud.
+            Para gerar carrosséis de alta qualidade, este aplicativo requer uma chave de API do HuggingFace (Qwen). Você pode obter uma chave gratuita em huggingface.co.
           </p>
           <button
             onClick={handleSelectKey}
@@ -46,12 +46,12 @@ export default function ApiKeyGate({ children }: { children: React.ReactNode }) 
             Selecionar Chave de API
           </button>
           <a
-            href="https://ai.google.dev/gemini-api/docs/billing"
+            href="https://huggingface.co/settings/tokens"
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-purple-600 hover:text-purple-800 hover:underline transition-colors"
           >
-            Saiba mais sobre faturamento e cotas
+            Obter chave de API do Anthropic
           </a>
         </div>
       </div>

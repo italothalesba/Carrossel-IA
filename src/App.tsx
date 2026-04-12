@@ -4,10 +4,15 @@
  */
 
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ImagePlus, FileDown, Wifi, WifiOff, Loader2, Database, Menu, X } from 'lucide-react';
+import { LayoutDashboard, ImagePlus, FileDown, Wifi, WifiOff, Loader2, Database, Menu, X, Zap, FlaskConical, Image, Gauge } from 'lucide-react';
 import StyleManagement from './pages/StyleManagement';
 import CarouselCreation from './pages/CarouselCreation';
+import ApiManagement from './pages/ApiManagement';
+import ApiTester from './pages/ApiTester';
+import ImagePromptExporter from './pages/ImagePromptExporter';
+import RateLimitDashboard from './pages/RateLimitDashboard';
 import ApiKeyGate from './components/ApiKeyGate';
+import AuthButton from './components/AuthButton';
 import { cn } from './lib/utils';
 import { generateMasterPromptPDF } from './lib/pdfGenerator';
 import { useState, useEffect } from 'react';
@@ -69,6 +74,10 @@ function Sidebar({ onClose }: { onClose?: () => void }) {
   const links = [
     { to: '/', icon: LayoutDashboard, label: 'Gestão de Estilos' },
     { to: '/create', icon: ImagePlus, label: 'Criação de Carrossel' },
+    { to: '/export-images', icon: Image, label: 'Exportar Imagens' },
+    { to: '/dashboard', icon: Gauge, label: 'Dashboard Rate Limits' },
+    { to: '/apis', icon: Zap, label: 'Gerenciar APIs' },
+    { to: '/test-api', icon: FlaskConical, label: 'Testar APIs' },
   ];
 
   return (
@@ -108,18 +117,7 @@ function Sidebar({ onClose }: { onClose?: () => void }) {
           );
         })}
       </nav>
-      <div className="p-4 border-t border-gray-800">
-        <button
-          onClick={() => {
-            generateMasterPromptPDF();
-            onClose?.();
-          }}
-          className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-400 hover:bg-gray-800 hover:text-white"
-        >
-          <FileDown size={20} />
-          <span className="font-medium">Exportar Prompt</span>
-        </button>
-      </div>
+      <AuthButton />
     </div>
   );
 }
@@ -164,6 +162,10 @@ function AppLayout() {
             <Routes>
               <Route path="/" element={<StyleManagement />} />
               <Route path="/create" element={<CarouselCreation />} />
+              <Route path="/export-images" element={<ImagePromptExporter />} />
+              <Route path="/dashboard" element={<RateLimitDashboard />} />
+              <Route path="/apis" element={<ApiManagement />} />
+              <Route path="/test-api" element={<ApiTester />} />
             </Routes>
           </ApiKeyGate>
         </main>

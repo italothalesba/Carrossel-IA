@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Teste Firebase Auth</title>
+  <style>
+    body { font-family: Arial; padding: 40px; }
+    .result { padding: 15px; margin: 10px 0; border-radius: 8px; }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+    .info { background: #d1ecf1; color: #0c5460; }
+  </style>
+</head>
+<body>
+  <h1>🔐 Teste Firebase Auth</h1>
+  <div id="status" class="result info">Aguardando...</div>
+  <button id="testBtn" onclick="testGoogleLogin()">Testar Login do Google</button>
+  
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+    import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
+    
+    const firebaseConfig = {
+      projectId: "gen-lang-client-0102122839",
+      appId: "1:1038323652999:web:597d62a09d47877f719b22",
+      apiKey: "AIzaSyDRmqC6UEpsxW1wy-p9JuAUqtYmsYFFCBA",
+      authDomain: "gen-lang-client-0102122839.firebaseapp.com",
+      storageBucket: "gen-lang-client-0102122839.firebasestorage.app",
+      messagingSenderId: "1038323652999"
+    };
+    
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+    
+    window.testGoogleLogin = async function() {
+      const status = document.getElementById('status');
+      status.className = 'result info';
+      status.textContent = '⏳ Abrindo popup do Google...';
+      
+      try {
+        const result = await signInWithPopup(auth, provider);
+        const user = result.user;
+        
+        status.className = 'result success';
+        status.innerHTML = `
+          <strong>✅ SUCESSO! Google Auth funcionando!</strong><br>
+          <strong>UID:</strong> ${user.uid}<br>
+          <strong>Email:</strong> ${user.email}<br>
+          <strong>Nome:</strong> ${user.displayName}
+        `;
+        
+        console.log('✅ Auth funcionando:', user);
+      } catch (error) {
+        status.className = 'result error';
+        status.innerHTML = `
+          <strong>❌ ERRO:</strong> ${error.message}<br>
+          <strong>Código:</strong> ${error.code}<br><br>
+          <em>Se for "auth/popup-closed-by-user", você fechou o popup (normal)</em><br>
+          <em>Se for "auth/unauthorized-domain", precisa adicionar localhost nos domínios autorizados</em>
+        `;
+        
+        console.error('❌ Erro:', error);
+      }
+    };
+    
+    // Verifica estado atual
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        console.log('✅ Usuário logado:', user.email);
+      } else {
+        console.log('ℹ️ Nenhum usuário logado');
+      }
+    });
+  </script>
+</body>
+</html>

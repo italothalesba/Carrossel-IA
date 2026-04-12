@@ -16,5 +16,9 @@ View your app in AI Studio: https://ai.studio/apps/57535148-1989-4f65-834e-4cff1
 1. Install dependencies:
    `npm install`
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+3. Optionally configure Alibaba Cloud DashScope in `.env.local`:
+   - `ALIYUN_DASHSCOPE_API_URL=https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation`
+   - `ALIYUN_DASHSCOPE_API_KEY` (your DashScope API key)
+   - `ALIYUN_DASHSCOPE_MODEL_NAME=qwen-plus` (or other Qwen model)
+4. Run the app:
    `npm run dev`

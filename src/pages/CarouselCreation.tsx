@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Download, Image as ImageIcon, Type, Link as LinkIcon, FileText, Mic, Clock, Trash2, RefreshCw, ThumbsUp, ThumbsDown, ImagePlus, UserCheck, Check, Plus } from 'lucide-react';
-import { draftCarouselContent, refineCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone, DraftResponse } from '../services/gemini';
+import { draftCarouselContent, refineCarouselContent, generateSlideImage, StyleData, SlideContent, queryStyleFromPinecone, learnFromFeedback, upsertStyleToPinecone, DraftResponse } from '../services/ai';
 import { cn } from '../lib/utils';
 import { db, auth, collection, query, onSnapshot, doc, setDoc, updateDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
-import { orderBy, limit } from 'firebase/firestore';
+import { orderBy, limit, where } from 'firebase/firestore';
 
 interface SlideFeedback {
   status: 'approved' | 'rejected';
@@ -60,30 +60,40 @@ export default function CarouselCreation() {
     let unsubscribeHistory: () => void;
 
     const loadHistory = () => {
-      if (!auth.currentUser) return;
-      
-      const historyQuery = query(
-        collection(db, 'carousel_history'),
-        orderBy('timestamp', 'desc'),
-        limit(20)
-      );
+      if (!auth.currentUser) {
+        console.log('⚠️ User not logged in, skipping history load');
+        return;
+      }
 
-      unsubscribeHistory = onSnapshot(historyQuery, (snapshot) => {
-        const historyList: CarouselHistoryItem[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          if (data.userId === auth.currentUser?.uid) {
-            historyList.push(data as CarouselHistoryItem);
-          }
+      try {
+        const historyQuery = query(
+          collection(db, 'carousel_history'),
+          where('userId', '==', auth.currentUser.uid),
+          orderBy('timestamp', 'desc'),
+          limit(20)
+        );
+
+        unsubscribeHistory = onSnapshot(historyQuery, (snapshot) => {
+          const historyList: CarouselHistoryItem[] = [];
+          snapshot.forEach((doc) => {
+            historyList.push(doc.data() as CarouselHistoryItem);
+          });
+          setHistory(historyList);
+          console.log(`✅ Loaded ${historyList.length} history items from Firestore`);
+        }, (err) => {
+          console.error('❌ Failed to load history from Firestore:', err.message);
+          console.log('💡 This is normal on first use. History will save on next carousel generation.');
+          setHistory([]);
         });
-        setHistory(historyList);
-      }, (err) => {
-        console.error('Failed to load history from Firestore', err);
-      });
+      } catch (err: any) {
+        console.error('Error setting up history listener:', err.message);
+        setHistory([]);
+      }
     };
 
     // Wait for auth to be ready
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      console.log('Auth state changed:', user ? `✅ ${user.email}` : '❌ Not logged in');
       if (user) {
         loadHistory();
       } else {
@@ -138,19 +148,53 @@ export default function CarouselCreation() {
       return;
     }
 
+    // VERIFICAR SAÚDE DAS APIs ANTES DE INICIAR
     setIsGenerating(true);
     setError('');
+    
+    try {
+      console.log('[HEALTH CHECK] Verificando saúde das APIs...');
+      const healthResponse = await fetch('/api/ai/health-check?minApis=3');
+      const healthData = await healthResponse.json();
+      
+      if (!healthData.isHealthy) {
+        console.warn('[HEALTH CHECK] ⚠️ Sistema não está saudável:', healthData.message);
+        setError(
+          `⚠️ Atenção: ${healthData.message}. ` +
+          `O sistema usará fallback inteligente, mas resultados podem ser genéricos. ` +
+          `Considere adicionar mais APIs de texto.`
+        );
+        // Não bloqueia, apenas avisa
+      } else {
+        console.log('[HEALTH CHECK] ✅', healthData.message);
+      }
+    } catch (err) {
+      console.warn('[HEALTH CHECK] Falha ao verificar saúde:', err);
+      // Continua mesmo assim
+    }
+
     await generateDraftWithStyle(style);
   };
 
   const generateDraftWithStyle = async (style: StyleData) => {
-    setGenerationStatus("Iniciando pipeline de agentes...");
+    setGenerationStatus("Iniciando pipeline de skills...");
+    setError('');
     try {
+      console.log('[PIPELINE] Iniciando geração de rascunho...');
       const draft = await draftCarouselContent(content, style, setGenerationStatus);
+      
+      if (!draft || !draft.slides || draft.slides.length === 0) {
+        throw new Error('Pipeline retornou rascunho vazio ou inválido. Verifique as chaves de API.');
+      }
+      
+      console.log(`[PIPELINE] Rascunho gerado com ${draft.slides.length} slides`);
       setDraftData(draft);
       setStep('draft');
     } catch (err: any) {
+      console.error('[PIPELINE] Erro:', err.message);
       setError(err.message || 'Erro ao gerar rascunho.');
+      setStep('input'); // Volta para input em caso de erro
+      setDraftData(null);
     } finally {
       setIsGenerating(false);
       setGenerationStatus(null);
@@ -181,25 +225,35 @@ export default function CarouselCreation() {
     if (!style || !draftData) return;
 
     setStep('generating_images');
-    setGenerationStatus("Gerando imagens finais...");
+    setGenerationStatus("Preparando carrossel...");
     setSlides([]);
 
     try {
-      const slidesWithImages = await Promise.all(
-        draftData.slides.map(async (slide, index) => {
-          try {
-            let slideType: 'cover' | 'content' | 'cta' = 'content';
-            if (index === 0) slideType = 'cover';
-            else if (index === draftData.slides.length - 1) slideType = 'cta';
+      // Geração SEQUENCIAL com delay de 10s para evitar rate limit
+      const slidesWithImages: (SlideContent & { imageUrl?: string | null; imagePrompt?: string })[] = [];
+      
+      for (let index = 0; index < draftData.slides.length; index++) {
+        const slide = draftData.slides[index];
 
-            const imageUrl = await generateSlideImage(slide.imagePrompt, style, slideType);
-            return { ...slide, imageUrl };
-          } catch (err) {
-            console.error("Failed to generate image for slide", slide.title, err);
-            return slide;
-          }
-        })
-      );
+        setGenerationStatus(`Gerando imagem ${index + 1}/${draftData.slides.length}...`);
+
+        try {
+          let slideType: 'cover' | 'content' | 'cta' = 'content';
+          if (index === 0) slideType = 'cover';
+          else if (index === draftData.slides.length - 1) slideType = 'cta';
+
+          const imageUrl = await generateSlideImage(slide.imagePrompt, style, slideType);
+          slidesWithImages.push({ ...slide, imageUrl });
+        } catch (err) {
+          console.warn(`⚠️ Imagem não gerada para slide ${index + 1}. Tentando próximo serviço...`);
+          slidesWithImages.push({ ...slide, imageUrl: null, imagePrompt: slide.imagePrompt });
+        }
+        
+        // Delay de 10s entre cada imagem para evitar rate limit
+        if (index < draftData.slides.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 10000));
+        }
+      }
 
       setSlides(slidesWithImages);
       
@@ -217,7 +271,36 @@ export default function CarouselCreation() {
       
       if (auth.currentUser) {
         try {
+          // Remover imagens base64 dos slides antes de salvar no Firestore (limite 1MB/doc)
+          const slidesWithoutImages = slidesWithImages.map(slide => {
+            const { imageUrl, ...rest } = slide;
+            // Guardar metadata da imagem ao invés do base64 completo
+            return {
+              ...rest,
+              hasImage: !!imageUrl,
+              imageSize: imageUrl ? Math.round(imageUrl.length * 0.75 / 1024) + 'KB' : null
+            };
+          });
+
+          const historyItem = {
+            id: newId,
+            timestamp: Date.now(),
+            content,
+            styleId: style.id,
+            slides: slidesWithoutImages,
+            userId: auth.currentUser?.uid || 'anonymous'
+          };
+
           await setDoc(doc(db, 'carousel_history', newId), historyItem);
+
+          // Salvar imagens base64 no IndexedDB (sem limite de tamanho)
+          const { set } = await import('idb-keyval');
+          for (const slide of slidesWithImages) {
+            if (slide.imageUrl) {
+              await set(`carousel_image_${newId}_${draftData.slides.indexOf(slide)}`, slide.imageUrl);
+            }
+          }
+          console.log('[HISTORY] Saved carousel to Firestore (metadata) + IndexedDB (images)');
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `carousel_history/${newId}`);
         }
@@ -237,10 +320,28 @@ export default function CarouselCreation() {
     }
   };
 
-  const loadFromHistory = (item: CarouselHistoryItem) => {
+  const loadFromHistory = async (item: CarouselHistoryItem) => {
+    // Carregar imagens do IndexedDB se existirem
+    const slidesWithImages = [...item.slides];
+    try {
+      const { get } = await import('idb-keyval');
+      for (let i = 0; i < slidesWithImages.length; i++) {
+        const slide = slidesWithImages[i];
+        if (slide.imageUrl) {
+          const imageUrl = await get(`carousel_image_${item.id}_${i}`);
+          if (imageUrl) {
+            slidesWithImages[i] = { ...slide, imageUrl };
+          }
+        }
+      }
+      console.log('[HISTORY] Loaded carousel images from IndexedDB');
+    } catch (err) {
+      console.warn('[HISTORY] Could not load images from IndexedDB:', err);
+    }
+
     setContent(item.content);
     setSelectedStyleId(item.styleId);
-    setSlides(item.slides);
+    setSlides(slidesWithImages);
     setCurrentHistoryId(item.id);
     setFeedbackState(null);
     setStep('done');
@@ -376,6 +477,25 @@ export default function CarouselCreation() {
 
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto relative">
+      {/* Error Banner */}
+      {error && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-50 border-2 border-red-300 text-red-900 px-6 py-4 rounded-xl shadow-2xl max-w-2xl z-50 animate-in fade-in slide-in-from-top-4">
+          <div className="flex items-start gap-3">
+            <div className="text-2xl">⚠️</div>
+            <div className="flex-1">
+              <h3 className="font-bold text-lg mb-1">Erro na Geração</h3>
+              <p className="text-sm">{error}</p>
+              <button 
+                onClick={() => setError('')}
+                className="mt-2 text-sm underline hover:text-red-700"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {successMessage && (
         <div className="fixed top-6 right-6 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top-4">
           <ThumbsUp size={20} />
@@ -385,7 +505,7 @@ export default function CarouselCreation() {
 
       <div className="mb-8">
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Criação de Carrossel</h1>
-        <p className="text-gray-500 mt-2 text-sm md:text-base">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 1080x1440).</p>
+        <p className="text-gray-500 mt-2 text-sm md:text-base">Gere um carrossel de 4 slides a partir do seu conteúdo (Formato 720x960).</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -564,7 +684,7 @@ export default function CarouselCreation() {
               {step === 'draft' ? 'Rascunho dos Slides' : 'Pré-visualização (3:4)'}
             </h2>
             
-            {step === 'draft' && draftData && (
+            {step === 'draft' && draftData?.slides && (
               <div className="flex flex-col gap-6">
                 {draftData.slides.map((slide, idx) => (
                   <div key={idx} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row">

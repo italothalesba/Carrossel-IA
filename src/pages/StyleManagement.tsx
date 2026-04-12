@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Plus, Loader2, Trash2, GripVertical, Pencil } from 'lucide-react';
-import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPinecone } from '../services/gemini';
+import { Upload, Plus, Loader2, Trash2, GripVertical, Pencil, MessageSquare } from 'lucide-react';
+import { extractStyleFromImages, StyleData, CategorizedImages, upsertStyleToPinecone } from '../services/ai';
 import { set } from 'idb-keyval';
 import { db, collection, query, onSnapshot, doc, setDoc, deleteDoc, OperationType, handleFirestoreError } from '../firebase';
 import { serverTimestamp } from 'firebase/firestore';
-import { compressImage } from '../lib/utils';
+import { compressImage, compressImageForFirestore } from '../lib/utils';
+import { StyleChatPanel } from '../components/StyleChatPanel';
 
 interface UploadedImage {
   id: string;
@@ -29,6 +30,16 @@ export default function StyleManagement() {
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
   const [imagesChanged, setImagesChanged] = useState(false);
+  const [chatStyle, setChatStyle] = useState<StyleData | null>(null);
+  const [styleUpdates, setStyleUpdates] = useState<{
+    coverStyle?: string;
+    contentStyle?: string;
+    ctaStyle?: string;
+    extraInstructions?: string;
+    colors?: string;
+    audience?: string;
+    tone?: string;
+  }>({});
 
   useEffect(() => {
     // Listen to Firestore for styles
@@ -51,8 +62,8 @@ export default function StyleManagement() {
     const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
 
-    if (uploadedImages.length + files.length > 15) {
-      setError('Você pode enviar no máximo 15 imagens de referência por estilo para evitar limites de armazenamento.');
+    if (uploadedImages.length + files.length > 30) {
+      setError('Você pode enviar no máximo 30 imagens de referência por estilo para melhor aprendizado.');
       return;
     }
 
@@ -167,13 +178,55 @@ export default function StyleManagement() {
         background: backgroundImage || undefined,
       };
 
+      // Salvar StyleDNA no documento Firestore (além do Pinecone)
+      // As imagens de referência são usadas para gerar o DNA via Gemini Vision
+      if (styleData.cover?.imagesBase64 && styleData.cover.imagesBase64.length > 0) {
+        try {
+          const { extractStyleDNAFromImages } = await import('../services/styleDNA');
+          console.log('[STYLE MANAGEMENT] Extracting StyleDNA from', styleData.cover.imagesBase64.length, 'cover images...');
+          const coverDNA = await extractStyleDNAFromImages(styleData.cover.imagesBase64, 'cover');
+
+          // Extrair DNA de content e cta também se houver imagens
+          let contentDNA, ctaDNA;
+          if (styleData.content?.imagesBase64 && styleData.content.imagesBase64.length > 0) {
+            contentDNA = await extractStyleDNAFromImages(styleData.content.imagesBase64, 'content');
+          }
+          if (styleData.cta?.imagesBase64 && styleData.cta.imagesBase64.length > 0) {
+            ctaDNA = await extractStyleDNAFromImages(styleData.cta.imagesBase64, 'cta');
+          }
+
+          // Anexar DNA ao style para salvar no Firestore
+          styleData.styleDNA = { cover: coverDNA, content: contentDNA, cta: ctaDNA };
+          console.log('[STYLE MANAGEMENT] ✅ StyleDNA extracted and attached to style');
+        } catch (dnaError) {
+          console.error('[STYLE MANAGEMENT] StyleDNA extraction failed:', dnaError);
+          // Não falhar o salvamento se o DNA falhar
+        }
+      }
+
       // Save to Firestore
-      const styleDoc = {
+      // Remover campos undefined (Firestore não aceita undefined)
+      // REMOVER imagens base64 para não exceder 1MB/doc - StyleDNA já contém o aprendizado visual
+      const styleDoc: any = {
         ...styleData,
         createdBy: existingStyle?.createdBy || 'anonymous',
         createdAt: existingStyle?.createdAt || serverTimestamp(),
         updatedAt: serverTimestamp()
       };
+
+      // Remover imagens base64 do documento Firestore (já estão no Pinecone + StyleDNA)
+      if (styleDoc.cover) delete styleDoc.cover.imagesBase64;
+      if (styleDoc.content) delete styleDoc.content.imagesBase64;
+      if (styleDoc.cta) delete styleDoc.cta.imagesBase64;
+
+      // Remover assets base64 também
+      if (styleDoc.assets) {
+        delete styleDoc.assets.logo;
+        delete styleDoc.assets.background;
+        if (Object.keys(styleDoc.assets).length === 0) {
+          delete styleDoc.assets;
+        }
+      }
 
       try {
         await setDoc(doc(db, 'styles', styleData.id), styleDoc);
@@ -219,26 +272,11 @@ export default function StyleManagement() {
     setExtraInstructions(style.metadata?.extraInstructions || '');
     setLogoImage(style.assets?.logo || null);
     setBackgroundImage(style.assets?.background || null);
-    
-    const existingImages: UploadedImage[] = [];
-    const addImagesFromCategory = (base64Array: string[] | undefined, category: 'cover' | 'content' | 'cta') => {
-      if (!base64Array) return;
-      base64Array.forEach((base64, index) => {
-        existingImages.push({
-          id: `existing-${category}-${index}-${Math.random().toString(36).substring(7)}`,
-          base64,
-          name: `Imagem de ${category === 'cover' ? 'Capa' : category === 'content' ? 'Meio' : 'CTA'} ${index + 1}`,
-          project: 'Imagens Atuais',
-          category
-        });
-      });
-    };
 
-    addImagesFromCategory(style.cover?.imagesBase64, 'cover');
-    addImagesFromCategory(style.content?.imagesBase64, 'content');
-    addImagesFromCategory(style.cta?.imagesBase64, 'cta');
-
-    setUploadedImages(existingImages);
+    // Imagens não estão mais no Firestore (removidas para evitar limite de 1MB)
+    // Para adicionar mais imagens, o usuário deve fazer upload novamente
+    console.log('[EDIT STYLE] Note: Images are stored in Pinecone, not Firestore. User can add more images.');
+    setUploadedImages([]);
     setImagesChanged(false);
     setIsAdding(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -358,7 +396,7 @@ export default function StyleManagement() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Imagens de Referência ({uploadedImages.length}/15)
+                Imagens de Referência ({uploadedImages.length}/30)
               </label>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 md:p-8 text-center hover:bg-gray-50 transition-colors">
                 <input
@@ -368,13 +406,13 @@ export default function StyleManagement() {
                   onChange={handleImageUpload}
                   className="hidden"
                   id="image-upload"
-                  disabled={uploadedImages.length >= 15}
+                  disabled={uploadedImages.length >= 30}
                 />
-                <label htmlFor="image-upload" className={`flex flex-col items-center ${uploadedImages.length >= 15 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                <label htmlFor="image-upload" className={`flex flex-col items-center ${uploadedImages.length >= 30 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
                   <Upload className="text-gray-400 mb-3" size={32} />
                   <span className="text-sm text-gray-600">
-                    {uploadedImages.length >= 15 
-                      ? 'Limite de 15 imagens atingido' 
+                    {uploadedImages.length >= 30
+                      ? 'Limite de 30 imagens atingido'
                       : 'Selecione as imagens dos seus projetos anteriores'}
                   </span>
                   <span className="text-xs text-gray-400 mt-1">O sistema tentará agrupar pelo nome do arquivo</span>
@@ -461,6 +499,9 @@ export default function StyleManagement() {
             <div className="flex justify-between items-start mb-4">
               <h3 className="text-lg font-semibold text-gray-900 truncate pr-2">{style.name}</h3>
               <div className="flex space-x-1">
+                <button onClick={() => setChatStyle(style)} className="text-gray-400 hover:text-blue-500 transition-colors flex-shrink-0 p-1" title="Chat de Aprendizado">
+                  <MessageSquare size={18} />
+                </button>
                 <button onClick={() => handleEditStyle(style)} className="text-gray-400 hover:text-purple-500 transition-colors flex-shrink-0 p-1" title="Editar / Adicionar Aprendizados">
                   <Pencil size={18} />
                 </button>
@@ -505,6 +546,44 @@ export default function StyleManagement() {
           </div>
         )}
       </div>
+
+      {/* Chat Panel */}
+      {chatStyle && (
+        <StyleChatPanel
+          style={chatStyle}
+          onClose={() => {
+            setChatStyle(null);
+            // Se houve atualizações, recarregar o estilo
+            if (Object.keys(styleUpdates).length > 0) {
+              setStyleUpdates({});
+            }
+          }}
+          onStyleUpdate={(updates) => {
+            setStyleUpdates(updates);
+            // Atualizar o estilo localmente
+            const updatedStyle = { ...chatStyle };
+            if (updates.coverStyle) {
+              updatedStyle.cover = { ...updatedStyle.cover, styleDescription: updates.coverStyle };
+            }
+            if (updates.contentStyle) {
+              updatedStyle.content = { ...updatedStyle.content, styleDescription: updates.contentStyle };
+            }
+            if (updates.ctaStyle) {
+              updatedStyle.cta = { ...updatedStyle.cta, styleDescription: updates.ctaStyle };
+            }
+            if (updates.extraInstructions || updates.colors || updates.audience || updates.tone) {
+              updatedStyle.metadata = {
+                ...updatedStyle.metadata,
+                extraInstructions: updates.extraInstructions || updatedStyle.metadata?.extraInstructions || '',
+                colors: updates.colors || updatedStyle.metadata?.colors || '',
+                audience: updates.audience || updatedStyle.metadata?.audience || '',
+                tone: updates.tone || updatedStyle.metadata?.tone || ''
+              };
+            }
+            setChatStyle(updatedStyle);
+          }}
+        />
+      )}
     </div>
   );
 }

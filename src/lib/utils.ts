@@ -39,3 +39,11 @@ export async function compressImage(base64Str: string, maxWidth = 512, maxHeight
     img.onerror = () => resolve(base64Str);
   });
 }
+
+/**
+ * Comprime imagem para armazenamento no Firestore (máx 1MB/doc)
+ * Usa 256x256 com qualidade 0.4 para caber muitas imagens
+ */
+export async function compressImageForFirestore(base64Str: string): Promise<string> {
+  return compressImage(base64Str, 256, 256, 0.4);
+}

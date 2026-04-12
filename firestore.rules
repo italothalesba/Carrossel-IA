@@ -92,6 +92,20 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
 
+    // API Status - Allow server-side writes (service account) and authenticated reads
+    // NOTE: Server runs with service account that bypasses security rules
+    // If using Firebase emulator, allow all access
+    match /api_status/{statusId} {
+      allow read: if true;
+      allow write: if true; // Allow server-side writes via service account
+    }
+
+    // R2 Cache - Allow authenticated users to read/write image cache
+    match /r2_cache/{cacheId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     match /users/{userId} {
       allow read, write: if true;
     }

@@ -1,0 +1,105 @@
+{
+  "timestamp": 1775828156990,
+  "total": 10,
+  "online": 7,
+  "offline": 3,
+  "disabledProviders": [
+    "nemotron-1",
+    "fireworks-2",
+    "fireworks-3"
+  ],
+  "results": [
+    {
+      "providerId": "nemotron-1",
+      "providerName": "Nemotron (Italo)",
+      "type": "openrouter",
+      "status": "timeout",
+      "latency": 10017,
+      "errorMessage": "This operation was aborted",
+      "timestamp": 1775828139526
+    },
+    {
+      "providerId": "nemotron-2",
+      "providerName": "Nemotron (Odonto)",
+      "type": "openrouter",
+      "status": "online",
+      "latency": 3713,
+      "statusCode": 200,
+      "timestamp": 1775828143239
+    },
+    {
+      "providerId": "nemotron-3",
+      "providerName": "Nemotron (Coruja)",
+      "type": "openrouter",
+      "status": "online",
+      "latency": 9167,
+      "statusCode": 200,
+      "timestamp": 1775828152406
+    },
+    {
+      "providerId": "groq-1",
+      "providerName": "Groq (Italo)",
+      "type": "groq",
+      "status": "online",
+      "latency": 472,
+      "statusCode": 200,
+      "timestamp": 1775828152879
+    },
+    {
+      "providerId": "groq-2",
+      "providerName": "Groq (Odonto)",
+      "type": "groq",
+      "status": "online",
+      "latency": 501,
+      "statusCode": 200,
+      "timestamp": 1775828153380
+    },
+    {
+      "providerId": "groq-3",
+      "providerName": "Groq (Coruja)",
+      "type": "groq",
+      "status": "online",
+      "latency": 240,
+      "statusCode": 200,
+      "timestamp": 1775828153621
+    },
+    {
+      "providerId": "fireworks-1",
+      "providerName": "Fireworks (Italo)",
+      "type": "fireworks",
+      "status": "online",
+      "latency": 1392,
+      "statusCode": 200,
+      "timestamp": 1775828155013
+    },
+    {
+      "providerId": "fireworks-2",
+      "providerName": "Fireworks (Coruja)",
+      "type": "fireworks",
+      "status": "offline",
+      "latency": 246,
+      "statusCode": 412,
+      "errorMessage": "{\"error\":{\"message\":\"Account corujaestudiomovel-f is suspended, possibly due to reaching the monthly spending limit or failure to pay past invoices. Please go to https://fireworks.ai/account/billing f",
+      "timestamp": 1775828155260
+    },
+    {
+      "providerId": "fireworks-3",
+      "providerName": "Fireworks (Odonto)",
+      "type": "fireworks",
+      "status": "offline",
+      "latency": 235,
+      "statusCode": 412,
+      "errorMessage": "{\"error\":{\"message\":\"Account odontojusneta-py14u3 is suspended, possibly due to reaching the monthly spending limit or failure to pay past invoices. Please go to https://fireworks.ai/account/billing f",
+      "timestamp": 1775828155496
+    },
+    {
+      "providerId": "cloudflare-image",
+      "providerName": "Cloudflare FLUX.1",
+      "type": "cloudflare-image",
+      "status": "online",
+      "latency": 1491,
+      "statusCode": 200,
+      "timestamp": 1775828156988
+    }
+  ]
+}
